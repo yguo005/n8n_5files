@@ -370,7 +370,6 @@ def analyze_questionnaire_trends(processed_data: List[Dict]) -> Dict[str, Any]:
             "name": questionnaire,
             "frequency": "unknown",
             "sensitivity": "unknown",
-            "minimal_change": 3,
             "improvement_direction": "decrease"
         })
         
