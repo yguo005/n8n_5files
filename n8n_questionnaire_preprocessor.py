@@ -332,8 +332,8 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         # Count questionnaires for debugging
         questionnaire_counts[questionnaire] = questionnaire_counts.get(questionnaire, 0) + 1
         
-        # Skip rows with NaN questionnaire (metadata rows)
-        if not questionnaire or questionnaire == 'nan':
+        # Skip rows with NaN/None/empty questionnaire (metadata rows)
+        if not questionnaire or questionnaire.lower() in ['nan', 'none', '<na>', 'null']:
             continue
             
         row = {
