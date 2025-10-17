@@ -6,7 +6,7 @@ Converts raw questionnaire data into structured, interpreted results for LLM pro
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import math
 
@@ -89,6 +89,12 @@ def to_iso_date(value: Any) -> str:
         elif hasattr(value, 'year'):
             # Handle datetime/Timestamp objects (pandas Timestamp, datetime.datetime)
             dt = value
+        elif isinstance(value, (int, float)):
+            # Handle Excel serial date numbers (days since 1900-01-01)
+            # Excel date system: 1 = 1900-01-01, 2 = 1900-01-02, etc.
+            # Note: Excel has a bug treating 1900 as a leap year, but for dates after 1900-02-28 this doesn't matter
+            excel_epoch = datetime(1899, 12, 30)  # Use Dec 30, 1899 to account for Excel's quirk
+            dt = excel_epoch + timedelta(days=int(value))
         else:
             return ''  # Can't parse, return empty instead of today's date
         return dt.strftime('%Y-%m-%d')
