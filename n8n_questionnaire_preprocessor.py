@@ -285,14 +285,6 @@ def interpret_sdq_score(score: int, subscale: str, cutoffs: Dict[str, tuple]) ->
         'interpretation': interpretation
     }
 
-def sdq_band(score: int) -> str:
-    """SDQ Total Difficulties bands - DEPRECATED, kept for backward compatibility"""
-    if score <= 13:
-        return 'normal'
-    elif score <= 16:
-        return 'borderline'
-    else:
-        return 'abnormal'
 
 def normalize_text(text: str) -> str:
     """Normalize text for comparison"""
@@ -442,7 +434,11 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
             cutoffs = q_info.get('cutoffs', {})
             index = who5_index(int(total))
             result['who5_index'] = index
+            result['derived']['scale'] = 'WHO-5 (0-100 index, lower worse)'
+            result['derived']['raw_score'] = int(total)
+            result['derived']['index_score'] = index
             result['severity'] = 'reduced well-being' if index <= cutoffs.get('poor_wellbeing', 50) else 'adequate well-being'
+            result['derived']['severity_level'] = result['severity']
             
             # Apply WHO-5 cut-offs
             if index <= cutoffs.get('depression_risk', 28):
@@ -510,14 +506,18 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         # CES-DC
         elif any(x in name for x in ['ces-dc', 'cesdc', 'ces dc']):
             result['derived']['scale'] = 'CES-DC (≥15 suggests risk for depression)'
+            result['derived']['total_score'] = int(total)
             result['severity'] = 'depression risk (≥15)' if total >= 15 else 'below risk threshold'
+            result['derived']['severity_level'] = result['severity']
             if total >= 15:
                 result['clinical_flags'].append('CES-DC positive screen (≥15)')
         
         # SCARED
         elif 'scared' in name:
             result['derived']['scale'] = 'SCARED (total ≥25 possible anxiety disorder; subscale cut-offs apply)'
+            result['derived']['total_score'] = int(total)
             result['severity'] = 'possible anxiety disorder (≥25)' if total >= 25 else 'below screening threshold'
+            result['derived']['severity_level'] = result['severity']
             
             # Subscales by dimension
             subscales = score_subscales(group['responses'], {
@@ -545,7 +545,9 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         elif any(x in name for x in ['rosenberg', 'rses']):
             result['derived']['scale'] = 'RSES (0-30; <15 low, 15-25 normal, >25 high)'
             result['derived']['note'] = 'Contains reverse-scored items; verify scoring before interpretation'
+            result['derived']['total_score'] = int(total)
             result['severity'] = rses_band(int(total))
+            result['derived']['severity_level'] = result['severity']
         
         # SDQ - Enhanced with version-specific interpretation
         elif 'sdq' in name:
@@ -614,7 +616,9 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         # PSC-17
         elif any(x in name for x in ['psc-17', 'psc17', 'psc 17']):
             result['derived']['scale'] = 'PSC-17 (total ≥15 positive; subscales Internalizing ≥5, Attention ≥7, Externalizing ≥7)'
+            result['derived']['total_score'] = int(total)
             result['severity'] = 'positive screen (≥15)' if total >= 15 else 'below threshold'
+            result['derived']['severity_level'] = result['severity']
             
             # Subscales by dimension
             subscales = score_subscales(group['responses'], {

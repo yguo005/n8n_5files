@@ -230,12 +230,12 @@ def determine_trend_direction(initial_score: float, latest_score: float,
                             improvement_direction: str) -> Dict[str, Any]:
     """
     Determine if change represents improvement, worsening, or stability.
-    Uses severity level changes as primary indicator since minimal change values
-    are not provided in the reference documentation.
+    Reports raw score changes and severity level changes without imposing
+    arbitrary magnitude thresholds. Clinical interpretation left to reviewers.
     """
     change = latest_score - initial_score
     
-    # Primary assessment: Did severity level change?
+    # Did severity level change?
     severity_changed = initial_severity != latest_severity
     
     # Determine direction based on improvement_direction and score change
@@ -256,36 +256,10 @@ def determine_trend_direction(initial_score: float, latest_score: float,
         else:
             score_direction = "stable"
     
-    # Determine magnitude based on severity level change and score change
-    if severity_changed:
-        # If severity level changed, it's clinically meaningful
-        if abs(change) >= 10:
-            magnitude = "large"
-        elif abs(change) >= 5:
-            magnitude = "moderate"
-        else:
-            magnitude = "small"
-        clinically_significant = True
-    else:
-        # No severity change - assess based on score change only
-        if abs(change) == 0:
-            magnitude = "none"
-            score_direction = "stable"
-        elif abs(change) >= 5:
-            magnitude = "moderate"
-        elif abs(change) >= 2:
-            magnitude = "small"
-        else:
-            magnitude = "minimal"
-        
-        # Without severity change, clinical significance is uncertain
-        clinically_significant = abs(change) >= 5
-    
     return {
         "direction": score_direction,
-        "magnitude": magnitude,
         "change_value": change,
-        "clinically_significant": clinically_significant,
+        "change_percentage": round((abs(change) / initial_score * 100), 1) if initial_score > 0 else 0,
         "severity_level_changed": severity_changed
     }
 
@@ -455,9 +429,8 @@ def analyze_questionnaire_trends(processed_data: List[Dict]) -> Dict[str, Any]:
                 "initial_score": initial_score,
                 "latest_score": latest_score,
                 "change": trend_analysis["change_value"],
+                "change_percentage": trend_analysis["change_percentage"],
                 "trend_direction": trend_analysis["direction"],
-                "magnitude": trend_analysis["magnitude"],
-                "clinically_significant": trend_analysis["clinically_significant"],
                 "severity_level_changed": trend_analysis["severity_level_changed"]
             },
             "severity_analysis": {
@@ -497,8 +470,10 @@ def analyze_questionnaire_trends(processed_data: List[Dict]) -> Dict[str, Any]:
         "detailed_trends": trends,
         "clinical_notes": [
             f"Analysis based on {len(trends)} questionnaires with multiple time points",
-            "Trend directions consider questionnaire-specific improvement patterns",
-            "Clinical significance based on severity level changes and score magnitude",
+            "Trend directions consider questionnaire-specific improvement patterns (higher/lower scores)",
+            "Score changes reported as raw values and percentages for transparent interpretation",
+            "Severity level changes indicate crossing clinical cut-off thresholds",
+            "Clinical significance interpretation left to reviewers based on context and expertise",
             "Timeline estimates used when dates missing (based on typical 4-6 week intervals)"
         ]
     }
@@ -506,53 +481,58 @@ def analyze_questionnaire_trends(processed_data: List[Dict]) -> Dict[str, Any]:
 # =============================================================================
 # n8n CODE NODE EXECUTION (Direct execution - no function wrappers)
 # =============================================================================
+# Note: In n8n, 'items' is a global variable provided by the platform
+# The following code is designed to run directly in an n8n Code node
 
-try:
-    # Debug: Log what we received from previous node (preprocessor)
-    print(f"🔍 n8n TREND DEBUG: Received {len(items)} processed items from preprocessor")
-    
-    if items:
-        sample_item = items[0].get('json', {})
-        print(f"🔍 n8n TREND DEBUG: Sample item keys: {list(sample_item.keys())}")
-        print(f"🔍 n8n TREND DEBUG: Sample questionnaire: {sample_item.get('questionnaire', 'N/A')}")
-        print(f"🔍 n8n TREND DEBUG: Sample timepoint: {sample_item.get('timepoint', 'N/A')}")
-    
-    # Perform trend analysis
-    trend_analysis = analyze_questionnaire_trends(items)
-    
-    # Debug: Log results
-    print(f"✅ n8n TREND SUCCESS: Generated trend analysis")
-    print(f"   → Analyzed {len(trend_analysis.get('trends', {}))} questionnaires")
-    print(f"   → Data quality warnings: {len(trend_analysis.get('data_quality', {}).get('warnings', []))}")
-    
-    # Log summary of trends
-    for q_name, trend_data in trend_analysis.get('trends', {}).items():
-        direction = trend_data.get('trend_direction', 'unknown')
-        change = trend_data.get('score_change', 0)
-        print(f"   → {q_name}: {direction} (change: {change:+.1f})")
-    
-    # Return trend analysis to next n8n node
-    return [{'json': trend_analysis}]
+# Check if running in n8n environment
+if 'items' in globals():
+    try:
+        # Debug: Log what we received from previous node (preprocessor)
+        print(f"🔍 n8n TREND DEBUG: Received {len(items)} processed items from preprocessor")
+        
+        if items:
+            sample_item = items[0].get('json', {})
+            print(f"🔍 n8n TREND DEBUG: Sample item keys: {list(sample_item.keys())}")
+            print(f"🔍 n8n TREND DEBUG: Sample questionnaire: {sample_item.get('questionnaire', 'N/A')}")
+            print(f"🔍 n8n TREND DEBUG: Sample timepoint: {sample_item.get('timepoint', 'N/A')}")
+        
+        # Perform trend analysis
+        trend_analysis = analyze_questionnaire_trends(items)
+        
+        # Debug: Log results
+        print(f"✅ n8n TREND SUCCESS: Generated trend analysis")
+        print(f"   → Analyzed {trend_analysis['profile_summary']['questionnaires_with_trends']} questionnaires")
+        print(f"   → Improving: {trend_analysis['trend_overview']['improving']}, Worsening: {trend_analysis['trend_overview']['worsening']}, Stable: {trend_analysis['trend_overview']['stable']}")
+        
+        # Log summary of trends
+        for trend in trend_analysis.get('detailed_trends', []):
+            q_name = trend.get('questionnaire', 'Unknown')
+            direction = trend['score_analysis']['trend_direction']
+            change = trend['score_analysis']['change']
+            print(f"   → {q_name}: {direction} (change: {change:+.1f})")
+        
+        # Return trend analysis to next n8n node
+        return [{'json': trend_analysis}]
 
-except Exception as e:
-    # Return detailed error information for n8n debugging
-    import traceback
-    
-    error_details = {
-        'error_message': str(e),
-        'error_type': type(e).__name__,
-        'input_items_count': len(items) if 'items' in globals() else 0,
-        'traceback': traceback.format_exc(),
-        'debug_info': {
-            'items_available': 'items' in globals(),
-            'items_type': type(items).__name__ if 'items' in globals() else 'undefined',
-            'help': 'Check that this Code node is connected after the Questionnaire Preprocessor node',
-            'expected_input': 'List of processed questionnaire items with questionnaire, timepoint, raw_total, severity fields'
+    except Exception as e:
+        # Return detailed error information for n8n debugging
+        import traceback
+        
+        error_details = {
+            'error_message': str(e),
+            'error_type': type(e).__name__,
+            'input_items_count': len(items) if 'items' in globals() else 0,
+            'traceback': traceback.format_exc(),
+            'debug_info': {
+                'items_available': 'items' in globals(),
+                'items_type': type(items).__name__ if 'items' in globals() else 'undefined',
+                'help': 'Check that this Code node is connected after the Questionnaire Preprocessor node',
+                'expected_input': 'List of processed questionnaire items with questionnaire, timepoint, raw_total, severity fields'
+            }
         }
-    }
-    
-    print(f"❌ n8n TREND ERROR: {str(e)}")
-    print(f"🔍 n8n TREND DEBUG: Error details logged in output")
-    
-    # Return error as JSON for next node
-    return [{'json': error_details}]
+        
+        print(f"❌ n8n TREND ERROR: {str(e)}")
+        print(f"🔍 n8n TREND DEBUG: Error details logged in output")
+        
+        # Return error as JSON for next node
+        return [{'json': error_details}]
