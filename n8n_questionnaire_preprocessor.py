@@ -86,8 +86,11 @@ def to_iso_date(value: Any) -> str:
         if isinstance(value, str):
             # Handle various date formats
             dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        elif hasattr(value, 'year'):
+            # Handle datetime/Timestamp objects (pandas Timestamp, datetime.datetime)
+            dt = value
         else:
-            dt = datetime(value) if hasattr(value, 'year') else datetime.now()
+            return ''  # Can't parse, return empty instead of today's date
         return dt.strftime('%Y-%m-%d')
     except:
         return ''
