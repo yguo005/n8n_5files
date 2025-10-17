@@ -439,6 +439,7 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
             result['who5_index'] = index
             result['derived']['scale'] = 'WHO-5 (0-100 index, lower worse)'
             result['derived']['raw_score'] = int(total)
+            result['derived']['total_score'] = int(total)  # Add total_score for consistency
             result['derived']['index_score'] = index
             result['severity'] = 'reduced well-being' if index <= cutoffs.get('poor_wellbeing', 50) else 'adequate well-being'
             result['derived']['severity_level'] = result['severity']
@@ -484,14 +485,17 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
             # Since the Excel has raw answer values, we'll provide a note about T-score conversion
             avg_score = total / len(group['responses']) if group['responses'] else 0
             result['derived']['raw_score'] = int(total)
+            result['derived']['total_score'] = int(total)  # Add total_score for consistency
             result['derived']['average_response'] = round(avg_score, 2)
             result['severity'] = 'requires T-score conversion for clinical interpretation'
+            result['derived']['severity_level'] = result['severity']
             result['clinical_flags'].append(f'PROMIS raw total: {int(total)}. Convert to T-scores using official tables for clinical interpretation.')
         
         # PedsQL
         elif 'pedsql' in name:
             result['derived']['scale'] = 'PedsQL (0-100, lower worse)'
             result['derived']['note'] = 'Items have reverse scoring; interpretation relies on transformed scores'
+            result['derived']['total_score'] = int(total)  # Add total_score for consistency
             # Use average of item scores if they're already transformed to 0-100 range
             valid_scores = [r['answer'] for r in group['responses'] 
                           if 0 <= r['answer'] <= 100]
@@ -505,6 +509,7 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
             else:
                 result['severity'] = 'needs transformed 0-100 scores'
                 result['clinical_flags'].append('PedsQL requires linearly transformed scores (0=100, 1=75, 2=50, 3=25, 4=0)')
+            result['derived']['severity_level'] = result['severity']
         
         # CES-DC
         elif any(x in name for x in ['ces-dc', 'cesdc', 'ces dc']):
