@@ -628,7 +628,8 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
                     )
         
         # PSC-17
-        elif any(x in name for x in ['psc-17', 'psc17', 'psc 17']):
+        elif any(x in name for x in ['psc-17', 'psc17', 'psc 17', 'Pediatric Symptom Checklist – 17 (PSC-17)', 'psc']):
+            print(f"🔍 PSC-17 DEBUG: Processing {group['questionnaire']} with total={total}")
             result['derived']['scale'] = 'PSC-17 (total ≥15 positive; subscales Internalizing ≥5, Attention ≥7, Externalizing ≥7)'
             result['derived']['total_score'] = int(total)
             result['severity'] = 'positive screen (≥15)' if total >= 15 else 'below threshold'
@@ -652,6 +653,7 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         
         # All other questionnaires - use generic cut-off approach
         else:
+            print(f"🔍 GENERIC DEBUG: Processing {group['questionnaire']} with total={total}, name='{name}'")
             cutoffs = q_info.get('cutoffs', {})
             result['severity'] = 'see cut-offs for interpretation'
             result['derived']['scale'] = f'{group["questionnaire"]} ({q_info.get("scale_range", "unknown range")})'

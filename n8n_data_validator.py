@@ -71,7 +71,7 @@ def validate_preprocessed_data(items: List[Dict]) -> Dict[str, Any]:
     missing_fields_by_item = []
     
     for idx, item in enumerate(data_items):
-        missing = [field for field in required_fields if field not in item or not item[field]]
+        missing = [field for field in required_fields if field not in item or (item[field] is None or (isinstance(item[field], str) and not item[field].strip()))]
         if not missing:
             items_with_all_required += 1
         else:
