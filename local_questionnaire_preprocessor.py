@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-n8n Questionnaire Preprocessor (Python)
-Converts raw questionnaire data into structured, interpreted results for LLM processing
+Local Questionnaire Preprocessor
+Standalone version that can read Excel files and process questionnaire data locally
 """
 
 import json
-import re
+import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import math
+import argparse
+import sys
 
 # Clinical cut-offs and scoring information from reference table
 QUESTIONNAIRE_CUTOFFS = {
@@ -155,144 +157,6 @@ def who5_index(raw_score: int) -> int:
     """WHO-5: raw 0-25 multiplied by 4 = index 0-100"""
     return max(0, min(100, raw_score * 4))
 
-def promis_severity(t_score: float) -> str:
-    """PROMIS Pediatric T-score interpretation"""
-    if t_score <= 55:
-        return 'within normal limits'
-    elif t_score <= 60:
-        return 'mild'
-    elif t_score <= 70:
-        return 'moderate'
-    else:
-        return 'severe'
-
-def pedsql_flag(score: float) -> str:
-    """PedsQL quality of life flag (0-100, lower worse)"""
-    if score < 70:
-        return 'possible impaired HRQoL (<70)'
-    else:
-        return ''
-
-def rses_band(score: int) -> str:
-    """Rosenberg Self-Esteem Scale bands"""
-    if score < 15:
-        return 'low'
-    elif score > 25:
-        return 'high'
-    else:
-        return 'normal'
-
-def detect_sdq_version(questionnaire_name: str) -> str:
-    """Detect if SDQ is parent or self-completed version"""
-    name_lower = questionnaire_name.lower()
-    if 'youth' in name_lower or 'self' in name_lower or 'adolescent' in name_lower:
-        return 'self_completed'
-    elif 'parent' in name_lower or 'teacher' in name_lower:
-        return 'parent'
-    else:
-        # Default to self-completed for youth report (11-17)
-        return 'self_completed'
-
-def get_sdq_cutoffs(version: str) -> Dict[str, Dict[str, Any]]:
-    """Get SDQ cut-offs based on version (parent or self-completed)"""
-    if version == 'self_completed':
-        return {
-            'total_difficulties': {
-                'normal': (0, 15),
-                'borderline': (16, 19),
-                'abnormal': (20, 40)
-            },
-            'emotional': {
-                'normal': (0, 5),
-                'borderline': (6, 6),
-                'abnormal': (7, 10)
-            },
-            'conduct': {
-                'normal': (0, 3),
-                'borderline': (4, 4),
-                'abnormal': (5, 10)
-            },
-            'hyperactivity': {
-                'normal': (0, 5),
-                'borderline': (6, 6),
-                'abnormal': (7, 10)
-            },
-            'peer_problems': {
-                'normal': (0, 3),
-                'borderline': (4, 5),
-                'abnormal': (6, 10)
-            },
-            'prosocial': {
-                'normal': (6, 10),
-                'borderline': (5, 5),
-                'abnormal': (0, 4)
-            }
-        }
-    else:  # parent version
-        return {
-            'total_difficulties': {
-                'normal': (0, 13),
-                'borderline': (14, 16),
-                'abnormal': (17, 40)
-            },
-            'emotional': {
-                'normal': (0, 3),
-                'borderline': (4, 4),
-                'abnormal': (5, 10)
-            },
-            'conduct': {
-                'normal': (0, 2),
-                'borderline': (3, 3),
-                'abnormal': (4, 10)
-            },
-            'hyperactivity': {
-                'normal': (0, 5),
-                'borderline': (6, 6),
-                'abnormal': (7, 10)
-            },
-            'peer_problems': {
-                'normal': (0, 2),
-                'borderline': (3, 3),
-                'abnormal': (4, 10)
-            },
-            'prosocial': {
-                'normal': (6, 10),
-                'borderline': (5, 5),
-                'abnormal': (0, 4)
-            }
-        }
-
-def interpret_sdq_score(score: int, subscale: str, cutoffs: Dict[str, tuple]) -> Dict[str, Any]:
-    """Interpret a single SDQ score against cut-offs"""
-    if subscale not in cutoffs:
-        return {'band': 'unknown', 'interpretation': 'No cut-offs available'}
-    
-    ranges = cutoffs[subscale]
-    
-    # Check which band the score falls into
-    if ranges['normal'][0] <= score <= ranges['normal'][1]:
-        band = 'normal'
-        interpretation = 'close to average - clinically significant problems in this area are unlikely'
-    elif ranges['borderline'][0] <= score <= ranges['borderline'][1]:
-        band = 'borderline'
-        if subscale == 'prosocial':
-            interpretation = 'slightly low, which may reflect clinically significant problems'
-        else:
-            interpretation = 'slightly raised, which may reflect clinically significant problems'
-    else:  # abnormal range
-        band = 'abnormal'
-        if subscale == 'prosocial':
-            interpretation = 'low - there is a substantial risk of clinically significant problems in this area'
-        else:
-            interpretation = 'high - there is a substantial risk of clinically significant problems in this area'
-    
-    return {
-        'score': score,
-        'band': band,
-        'interpretation': interpretation
-    }
-
-
 def normalize_text(text: str) -> str:
     """Normalize text for comparison"""
     return str(text or '').strip().lower()
@@ -314,18 +178,49 @@ def score_subscales(responses: List[Dict], mapping: Dict[str, callable]) -> Dict
         }
     return subscales
 
+def read_excel_data(file_path: str) -> List[Dict]:
+    """Read Excel file and convert to the format expected by the preprocessor"""
+    print(f"📖 Reading Excel file: {file_path}")
+    
+    try:
+        # Read Excel file
+        df = pd.read_excel(file_path)
+        print(f"📊 Loaded {len(df)} rows from Excel")
+        print(f"📊 Columns: {list(df.columns)}")
+        
+        # Convert DataFrame to list of items in n8n format
+        items = []
+        for index, row in df.iterrows():
+            # Convert row to dictionary and handle NaN values
+            row_dict = {}
+            for col, value in row.items():
+                if pd.isna(value):
+                    row_dict[col] = None
+                else:
+                    row_dict[col] = value
+            
+            # Wrap in n8n format
+            items.append({'json': row_dict})
+        
+        print(f"✅ Converted to {len(items)} items for processing")
+        return items
+        
+    except Exception as e:
+        print(f"❌ Error reading Excel file: {e}")
+        sys.exit(1)
+
 def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
     """
     Main preprocessing function for questionnaire data
     
     Args:
-        items: List of raw questionnaire items from n8n
+        items: List of raw questionnaire items
         
     Returns:
         List of processed items with computed scores, severities, and flags
     """
     
-    # Debug logging for n8n
+    # Debug logging
     print(f"🔍 PREPROCESSING: Starting with {len(items)} raw items")
     
     # Step A: Normalize individual rows
@@ -392,6 +287,8 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
     for group in groups.values():
         name = normalize_text(group['questionnaire'])
         total = sum(safe_number(r.get('answer', 0)) for r in group['responses'])
+        
+        print(f"🔍 PROCESSING: {group['questionnaire']} -> name='{name}', total={total}")
         
         # Get questionnaire-specific cut-off information
         q_info = get_questionnaire_info(group['questionnaire'])
@@ -494,6 +391,30 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
             result['severity'] = 'requires T-score conversion for clinical interpretation'
             result['derived']['severity_level'] = result['severity']
             result['clinical_flags'].append(f'PROMIS raw total: {int(total)}. Convert to T-scores using official tables for clinical interpretation.')
+        
+        # PSC-17
+        elif any(x in name for x in ['psc-17', 'psc17', 'psc 17', 'Pediatric Symptom Checklist – 17 (PSC-17)', 'psc']):
+            print(f"🔍 PSC-17 DEBUG: Processing {group['questionnaire']} with total={total}")
+            result['derived']['scale'] = 'PSC-17 (total ≥15 positive; subscales Internalizing ≥5, Attention ≥7, Externalizing ≥7)'
+            result['derived']['total_score'] = int(total)
+            result['severity'] = 'positive screen (≥15)' if total >= 15 else 'below threshold'
+            result['derived']['severity_level'] = result['severity']
+            
+            # Subscales by dimension
+            subscales = score_subscales(group['responses'], {
+                'Internalizing': lambda r: includes_any(r['dimension'], ['internalizing']),
+                'Attention': lambda r: includes_any(r['dimension'], ['attention']),
+                'Externalizing': lambda r: includes_any(r['dimension'], ['externalizing'])
+            })
+            result['derived']['subscales'] = subscales
+            
+            # Subscale flags
+            if subscales.get('Internalizing', {}).get('total', 0) >= 5:
+                result['clinical_flags'].append('PSC-17 Internalizing ≥5')
+            if subscales.get('Attention', {}).get('total', 0) >= 7:
+                result['clinical_flags'].append('PSC-17 Attention ≥7')
+            if subscales.get('Externalizing', {}).get('total', 0) >= 7:
+                result['clinical_flags'].append('PSC-17 Externalizing ≥7')
         
         # PedsQL - Proper scoring with reverse transformation
         elif 'pedsql' in name:
@@ -629,143 +550,11 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
                 result['derived']['severity_level'] = result['severity']
                 result['clinical_flags'].append('PedsQL: No valid responses in 0-4 range for transformation')
         
-        # CES-DC
-        elif any(x in name for x in ['ces-dc', 'cesdc', 'ces dc']):
-            result['derived']['scale'] = 'CES-DC (≥15 suggests risk for depression)'
-            result['derived']['total_score'] = int(total)
-            result['severity'] = 'depression risk (≥15)' if total >= 15 else 'below risk threshold'
-            result['derived']['severity_level'] = result['severity']
-            if total >= 15:
-                result['clinical_flags'].append('CES-DC positive screen (≥15)')
-        
-        # SCARED
-        elif 'scared' in name:
-            result['derived']['scale'] = 'SCARED (total ≥25 possible anxiety disorder; subscale cut-offs apply)'
-            result['derived']['total_score'] = int(total)
-            result['severity'] = 'possible anxiety disorder (≥25)' if total >= 25 else 'below screening threshold'
-            result['derived']['severity_level'] = result['severity']
-            
-            # Subscales by dimension
-            subscales = score_subscales(group['responses'], {
-                'Panic': lambda r: includes_any(r['dimension'], ['panic']),
-                'Generalized Anxiety (GAD)': lambda r: includes_any(r['dimension'], ['gad', 'generalized']),
-                'Separation': lambda r: includes_any(r['dimension'], ['separation']),
-                'Social': lambda r: includes_any(r['dimension'], ['social']),
-                'School Phobia': lambda r: includes_any(r['dimension'], ['school'])
-            })
-            result['derived']['subscales'] = subscales
-            
-            # Subscale flags
-            if subscales.get('Panic', {}).get('total', 0) >= 7:
-                result['clinical_flags'].append('SCARED Panic ≥7')
-            if subscales.get('Social', {}).get('total', 0) >= 8:
-                result['clinical_flags'].append('SCARED Social ≥8')
-            if subscales.get('School Phobia', {}).get('total', 0) >= 3:
-                result['clinical_flags'].append('SCARED School ≥3')
-            if subscales.get('Separation', {}).get('total', 0) >= 5:
-                result['clinical_flags'].append('SCARED Separation ≥5')
-            if subscales.get('Generalized Anxiety (GAD)', {}).get('total', 0) >= 9:
-                result['clinical_flags'].append('SCARED GAD ≥9')
-        
-        # RSES
-        elif any(x in name for x in ['rosenberg', 'rses']):
-            result['derived']['scale'] = 'RSES (0-30; <15 low, 15-25 normal, >25 high)'
-            result['derived']['note'] = 'Contains reverse-scored items; verify scoring before interpretation'
-            result['derived']['total_score'] = int(total)
-            result['severity'] = rses_band(int(total))
-            result['derived']['severity_level'] = result['severity']
-        
-        # SDQ - Enhanced with version-specific interpretation
-        elif 'sdq' in name:
-            # Detect version (parent or self-completed)
-            sdq_version = detect_sdq_version(group['questionnaire'])
-            sdq_cutoffs = get_sdq_cutoffs(sdq_version)
-            
-            # Subscales by dimension
-            subscales = score_subscales(group['responses'], {
-                'Emotional': lambda r: includes_any(r['dimension'], ['emotional']),
-                'Conduct': lambda r: includes_any(r['dimension'], ['conduct']),
-                'Hyperactivity/Inattention': lambda r: includes_any(r['dimension'], ['hyperactivity', 'inattention']),
-                'Peer Problems': lambda r: includes_any(r['dimension'], ['peer']),
-                'Prosocial': lambda r: includes_any(r['dimension'], ['prosocial'])
-            })
-            
-            # Total difficulties (exclude Prosocial)
-            total_difficulties = (
-                subscales.get('Emotional', {}).get('total', 0) +
-                subscales.get('Conduct', {}).get('total', 0) +
-                subscales.get('Hyperactivity/Inattention', {}).get('total', 0) +
-                subscales.get('Peer Problems', {}).get('total', 0)
-            )
-            
-            # Store raw scores
-            result['derived']['raw_scores'] = {
-                'total_difficulties': total_difficulties,
-                'emotional': subscales.get('Emotional', {}).get('total', 0),
-                'conduct': subscales.get('Conduct', {}).get('total', 0),
-                'hyperactivity': subscales.get('Hyperactivity/Inattention', {}).get('total', 0),
-                'peer_problems': subscales.get('Peer Problems', {}).get('total', 0),
-                'prosocial': subscales.get('Prosocial', {}).get('total', 0)
-            }
-            
-            # Store subscale details for reference
-            result['derived']['subscales'] = subscales
-            
-            # Interpret all scores using version-specific cut-offs
-            result['derived']['interpretations'] = {
-                'version': sdq_version,
-                'total_difficulties': interpret_sdq_score(total_difficulties, 'total_difficulties', sdq_cutoffs),
-                'emotional': interpret_sdq_score(result['derived']['raw_scores']['emotional'], 'emotional', sdq_cutoffs),
-                'conduct': interpret_sdq_score(result['derived']['raw_scores']['conduct'], 'conduct', sdq_cutoffs),
-                'hyperactivity': interpret_sdq_score(result['derived']['raw_scores']['hyperactivity'], 'hyperactivity', sdq_cutoffs),
-                'peer_problems': interpret_sdq_score(result['derived']['raw_scores']['peer_problems'], 'peer_problems', sdq_cutoffs),
-                'prosocial': interpret_sdq_score(result['derived']['raw_scores']['prosocial'], 'prosocial', sdq_cutoffs)
-            }
-            
-            # Set overall severity based on total difficulties
-            total_diff_interpretation = result['derived']['interpretations']['total_difficulties']
-            result['severity'] = total_diff_interpretation['band']
-            
-            # Add scale information with version-specific cut-offs
-            if sdq_version == 'self_completed':
-                result['derived']['scale'] = 'SDQ Total Difficulties - Self-Completed (0-15 normal, 16-19 borderline, 20-40 abnormal)'
-            else:
-                result['derived']['scale'] = 'SDQ Total Difficulties - Parent/Teacher (0-13 normal, 14-16 borderline, 17-40 abnormal)'
-            
-            # Add clinical flags for abnormal subscales
-            for subscale_name, interpretation in result['derived']['interpretations'].items():
-                if subscale_name != 'version' and interpretation.get('band') == 'abnormal':
-                    result['clinical_flags'].append(
-                        f"SDQ {subscale_name.replace('_', ' ').title()}: {interpretation['score']} - {interpretation['interpretation']}"
-                    )
-        
-        # PSC-17
-        elif any(x in name for x in ['psc-17', 'psc17', 'psc 17', 'Pediatric Symptom Checklist – 17 (PSC-17)', 'psc']):
-            print(f"🔍 PSC-17 DEBUG: Processing {group['questionnaire']} with total={total}")
-            result['derived']['scale'] = 'PSC-17 (total ≥15 positive; subscales Internalizing ≥5, Attention ≥7, Externalizing ≥7)'
-            result['derived']['total_score'] = int(total)
-            result['severity'] = 'positive screen (≥15)' if total >= 15 else 'below threshold'
-            result['derived']['severity_level'] = result['severity']
-            
-            # Subscales by dimension
-            subscales = score_subscales(group['responses'], {
-                'Internalizing': lambda r: includes_any(r['dimension'], ['internalizing']),
-                'Attention': lambda r: includes_any(r['dimension'], ['attention']),
-                'Externalizing': lambda r: includes_any(r['dimension'], ['externalizing'])
-            })
-            result['derived']['subscales'] = subscales
-            
-            # Subscale flags
-            if subscales.get('Internalizing', {}).get('total', 0) >= 5:
-                result['clinical_flags'].append('PSC-17 Internalizing ≥5')
-            if subscales.get('Attention', {}).get('total', 0) >= 7:
-                result['clinical_flags'].append('PSC-17 Attention ≥7')
-            if subscales.get('Externalizing', {}).get('total', 0) >= 7:
-                result['clinical_flags'].append('PSC-17 Externalizing ≥7')
-        
         # All other questionnaires - use generic cut-off approach
         else:
             print(f"🔍 GENERIC DEBUG: Processing {group['questionnaire']} with total={total}, name='{name}'")
+            if 'psc' in name.lower() or 'pediatric' in name.lower():
+                print(f"🔍 GENERIC DEBUG: PSC-17 fell through to generic handler!")
             cutoffs = q_info.get('cutoffs', {})
             result['severity'] = 'see cut-offs for interpretation'
             result['derived']['scale'] = f'{group["questionnaire"]} ({q_info.get("scale_range", "unknown range")})'
@@ -786,61 +575,56 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
             if subscales_info:
                 result['derived']['subscale_cutoffs'] = subscales_info
         
-        results.append({'json': result})
+        results.append(result)
     
+    print(f"✅ PREPROCESSING: Generated {len(results)} processed questionnaire groups")
     return results
 
-# =============================================================================
-# n8n CODE NODE EXECUTION (Direct execution - no function wrappers)
-# =============================================================================
-# Note: In n8n, 'items' is a global variable provided by the platform
-# The following code is designed to run directly in an n8n Code node
+def save_results(results: List[Dict], output_file: str):
+    """Save results to JSON file"""
+    print(f"💾 Saving results to: {output_file}")
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+    
+    print(f"✅ Saved {len(results)} processed items to {output_file}")
 
-# Check if running in n8n environment
-if 'items' in globals():
-    try:
-        # Debug: Log what we received from previous node
-        print(f"🔍 n8n DEBUG: Received {len(items)} items from previous node")
-        
-        if items:
-            sample_item = items[0].get('json', {})
-            print(f"🔍 n8n DEBUG: Sample item keys: {list(sample_item.keys())}")
-            print(f"🔍 n8n DEBUG: Sample questionnaire: {sample_item.get('questionnaire', 'N/A')}")
-        
-        # Process the questionnaire data
-        processed_items = preprocess_questionnaire_data(items)
-        
-        # Debug: Log results
-        print(f"✅ n8n SUCCESS: Generated {len(processed_items)} processed questionnaire groups")
-        
-        # Log summary of each processed group
-        for item in processed_items:
-            data = item['json']
-            flags_summary = f" | Flags: {len(data.get('clinical_flags', []))}" if data.get('clinical_flags') else ""
-            print(f"   → {data['questionnaire']} T{data['timepoint']}: score={data['raw_total']}, severity={data['severity']}{flags_summary}")
-        
-        # Return the processed items - n8n expects this format
-        return processed_items
+def main():
+    parser = argparse.ArgumentParser(description='Process questionnaire data from Excel file')
+    parser.add_argument('input_file', help='Path to Excel file')
+    parser.add_argument('-o', '--output', default='processed_questionnaires.json', 
+                       help='Output JSON file (default: processed_questionnaires.json)')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
+    
+    args = parser.parse_args()
+    
+    print("🚀 Local Questionnaire Preprocessor")
+    print("=" * 50)
+    
+    # Read Excel data
+    items = read_excel_data(args.input_file)
+    
+    # Process questionnaire data
+    results = preprocess_questionnaire_data(items)
+    
+    # Save results
+    save_results(results, args.output)
+    
+    # Summary
+    print("\n📊 PROCESSING SUMMARY:")
+    print("=" * 50)
+    questionnaire_summary = {}
+    for result in results:
+        q_name = result['questionnaire']
+        if q_name not in questionnaire_summary:
+            questionnaire_summary[q_name] = 0
+        questionnaire_summary[q_name] += 1
+    
+    for q_name, count in questionnaire_summary.items():
+        print(f"  {q_name}: {count} assessment(s)")
+    
+    print(f"\n✅ Total: {len(results)} processed assessments")
+    print(f"💾 Results saved to: {args.output}")
 
-    except Exception as e:
-        # Return detailed error information for n8n debugging
-        import traceback
-        
-        error_details = {
-            'error_message': str(e),
-            'error_type': type(e).__name__,
-            'input_items_count': len(items) if 'items' in globals() else 0,
-            'traceback': traceback.format_exc(),
-            'debug_info': {
-                'items_available': 'items' in globals(),
-                'items_type': type(items).__name__ if 'items' in globals() else 'undefined',
-                'help': 'Check that this Code node is connected after a Spreadsheet File node with the first sheet data'
-            }
-        }
-        
-        print(f"❌ n8n ERROR: {str(e)}")
-        print(f"🔍 n8n DEBUG: Error details logged in output")
-        
-        # Return error as JSON for next node
-        return [{'json': error_details}]
-
+if __name__ == "__main__":
+    main()

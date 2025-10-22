@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-n8n Data Quality Validator & Checkpoint
-Validates preprocessed questionnaire data before trend analysis or LLM processing
-Use this as a checkpoint node between Preprocessor and Trend Analyzer
+Local Data Quality Validator
+Standalone version that can validate processed questionnaire data locally
 """
+
 import json
+import argparse
+import sys
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -46,27 +48,8 @@ def validate_preprocessed_data(items: List[Dict]) -> Dict[str, Any]:
         validation_report["errors"].append("No data received - empty input")
         return validation_report
     
-    # Extract json data from items
-    data_items = []
-    print(f"🔍 DEBUG: Received {len(items)} items from preprocessor")
-    
-    for idx, item in enumerate(items):
-        json_data = item.get('json', {})
-        if json_data:
-            data_items.append(json_data)
-            # Debug first few items
-            if idx < 2:
-                print(f"🔍 DEBUG: Item {idx} keys: {list(json_data.keys())}")
-                print(f"🔍 DEBUG: Item {idx} has derived: {bool(json_data.get('derived'))}")
-                if json_data.get('derived'):
-                    print(f"🔍 DEBUG: Item {idx} derived keys: {list(json_data['derived'].keys())}")
-    
-    print(f"🔍 DEBUG: Extracted {len(data_items)} valid data items")
-    
-    if not data_items:
-        validation_report["status"] = "FAIL"
-        validation_report["errors"].append("No valid JSON data found in items")
-        return validation_report
+    # Items are already in the correct format (not wrapped in 'json' key for local processing)
+    data_items = items
     
     # =========================================================================
     # CHECK 1: Required Fields Validation
@@ -269,7 +252,7 @@ def validate_preprocessed_data(items: List[Dict]) -> Dict[str, Any]:
 
     # Calculate derived count based on items that are NOT empty
     final_items_with_derived = len(data_items) - len(items_with_empty_derived)
-    
+
     validation_report["validation_checks"]["derived_data_quality"] = {
         "items_with_derived": final_items_with_derived,
         "items_with_empty_derived": len(items_with_empty_derived),
@@ -456,86 +439,78 @@ def format_validation_report(validation: Dict[str, Any]) -> str:
             lines.append(f"  💡 {rec}")
         lines.append("")
     
+    # Questionnaire Distribution
+    if validation.get('data_quality_metrics', {}).get('questionnaire_distribution'):
+        dist = validation['data_quality_metrics']['questionnaire_distribution']
+        lines.append("QUESTIONNAIRE DISTRIBUTION:")
+        for q_name, info in dist['summary'].items():
+            lines.append(f"  {q_name}:")
+            lines.append(f"    Assessments: {info['total_assessments']}")
+            lines.append(f"    Timepoints: {info['unique_timepoints']}")
+            lines.append(f"    Score Range: {info['score_range']['min']}-{info['score_range']['max']}")
+        lines.append("")
+    
     lines.append("=" * 70)
     return "\n".join(lines)
 
-# =============================================================================
-# n8n CODE NODE EXECUTION (Direct execution - no function wrappers)
-# =============================================================================
-# Note: In n8n, 'items' is a global variable provided by the platform
-# This validator node should be placed AFTER the Preprocessor and BEFORE the Trend Analyzer
-
-# Check if running in n8n environment
-if 'items' in globals():
+def load_processed_data(file_path: str) -> List[Dict]:
+    """Load processed questionnaire data from JSON file"""
+    print(f"📖 Loading processed data from: {file_path}")
+    
     try:
-        # Debug: Log what we received from preprocessor
-        print(f"🔍 VALIDATOR: Received {len(items)} items from preprocessor")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
         
-        # Run validation
-        validation_result = validate_preprocessed_data(items)
+        print(f"✅ Loaded {len(data)} processed items")
+        return data
         
-        # Print formatted report
-        print("\n" + format_validation_report(validation_result))
-        
-        # Determine what to output based on validation status
-        if validation_result['status'] == 'FAIL':
-            print(f"❌ VALIDATION FAILED: {len(validation_result['errors'])} critical error(s) found")
-            print("🛑 Stopping workflow - fix errors before proceeding")
-            
-            # Return validation report only (not the data)
-            return [{'json': {
-                'validation_status': 'FAIL',
-                'validation_report': validation_result,
-                'data_passed': False,
-                'message': 'Data quality check failed - see validation_report for details'
-            }}]
-        
-        elif validation_result['status'] == 'WARNING':
-            print(f"⚠️  VALIDATION PASSED WITH WARNINGS: {len(validation_result['warnings'])} warning(s)")
-            print("✅ Proceeding with data - review warnings")
-            
-            # Return both validation report AND original data
-            return [{'json': {
-                'validation_status': 'WARNING',
-                'validation_report': validation_result,
-                'data_passed': True,
-                'message': 'Data quality check passed with warnings',
-                'processed_data': [item for item in items]  # Pass through original data
-            }}]
-        
-        else:  # PASS
-            print(f"✅ VALIDATION PASSED: All checks successful")
-            print(f"   → {validation_result['summary']['questionnaires_analyzed']} questionnaires validated")
-            print(f"   → Ready for trend analysis: {validation_result['data_quality_metrics']['trend_analysis_readiness']['ready_for_trend_analysis']}")
-            
-            # Return both validation report AND original data
-            return [{'json': {
-                'validation_status': 'PASS',
-                'validation_report': validation_result,
-                'data_passed': True,
-                'message': 'Data quality check passed - ready for trend analysis',
-                'processed_data': [item for item in items]  # Pass through original data
-            }}]
-
     except Exception as e:
-        # Return detailed error information for n8n debugging
-        import traceback
-        
-        error_details = {
-            'error_message': str(e),
-            'error_type': type(e).__name__,
-            'input_items_count': len(items) if 'items' in globals() else 0,
-            'traceback': traceback.format_exc(),
-            'debug_info': {
-                'items_available': 'items' in globals(),
-                'items_type': type(items).__name__ if 'items' in globals() else 'undefined',
-                'help': 'Check that this Validator node is connected after the Questionnaire Preprocessor node'
-            }
-        }
-        
-        print(f"❌ VALIDATOR ERROR: {str(e)}")
-        print(f"🔍 VALIDATOR DEBUG: Error details logged in output")
-        
-        # Return error as JSON for next node
-        return [{'json': error_details}]
+        print(f"❌ Error loading file: {e}")
+        sys.exit(1)
 
+def save_validation_report(report: Dict[str, Any], output_file: str):
+    """Save validation report to JSON file"""
+    print(f"💾 Saving validation report to: {output_file}")
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+    
+    print(f"✅ Saved validation report to {output_file}")
+
+def main():
+    parser = argparse.ArgumentParser(description='Validate processed questionnaire data')
+    parser.add_argument('input_file', help='Path to processed JSON file')
+    parser.add_argument('-o', '--output', default='validation_report.json', 
+                       help='Output validation report file (default: validation_report.json)')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
+    
+    args = parser.parse_args()
+    
+    print("🔍 Local Data Quality Validator")
+    print("=" * 50)
+    
+    # Load processed data
+    processed_data = load_processed_data(args.input_file)
+    
+    # Validate data
+    validation_report = validate_preprocessed_data(processed_data)
+    
+    # Print formatted report
+    print("\n" + format_validation_report(validation_report))
+    
+    # Save validation report
+    save_validation_report(validation_report, args.output)
+    
+    # Exit with appropriate code
+    if validation_report['status'] == 'FAIL':
+        print(f"\n❌ VALIDATION FAILED: {len(validation_report['errors'])} critical error(s) found")
+        sys.exit(1)
+    elif validation_report['status'] == 'WARNING':
+        print(f"\n⚠️  VALIDATION PASSED WITH WARNINGS: {len(validation_report['warnings'])} warning(s)")
+        sys.exit(0)
+    else:
+        print(f"\n✅ VALIDATION PASSED: All checks successful")
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()
