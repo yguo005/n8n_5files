@@ -253,14 +253,84 @@ def validate_preprocessed_data(items: List[Dict]) -> Dict[str, Any]:
     items_with_scale_info = 0
     items_with_interpretations = 0
     
+    # Debug info for first few items
+    debug_samples = []
+    
     for idx, item in enumerate(data_items):
         derived = item.get('derived')
-        if derived and isinstance(derived, dict):
-            if derived.get('scale'):
-                items_with_scale_info += 1
-            if derived.get('interpretations'):
-                items_with_interpretations += 1
-        else:
+        
+        # Collect debug info for first 3 items
+        if idx < 3:
+            debug_info = {
+                'item_index': idx,
+                'questionnaire': item.get('questionnaire', 'Unknown'),
+                'derived_exists': derived is not None,
+                'derived_type': str(type(derived)),
+                'derived_is_dict': isinstance(derived, dict),
+                'has_to_py_method': hasattr(derived, 'to_py') if derived else False,
+                'has_scale': False,
+                'has_interpretations': False,
+                'derived_keys': None
+            }
+            
+            # Try to extract info from derived data
+            if derived:
+                if isinstance(derived, dict):
+                    debug_info['derived_keys'] = list(derived.keys())
+                    debug_info['has_scale'] = bool(derived.get('scale'))
+                    debug_info['has_interpretations'] = bool(derived.get('interpretations'))
+                elif hasattr(derived, 'to_py'):
+                    try:
+                        derived_py = derived.to_py()
+                        if isinstance(derived_py, dict):
+                            debug_info['derived_keys'] = list(derived_py.keys())
+                            debug_info['has_scale'] = bool(derived_py.get('scale'))
+                            debug_info['has_interpretations'] = bool(derived_py.get('interpretations'))
+                    except:
+                        pass
+                elif hasattr(derived, 'scale'):
+                    try:
+                        debug_info['has_scale'] = bool(derived.scale)
+                        debug_info['has_interpretations'] = bool(getattr(derived, 'interpretations', False))
+                    except:
+                        pass
+            
+            debug_samples.append(debug_info)
+        
+        # Handle both Python dicts and JavaScript proxy objects from n8n
+        is_valid_derived = False
+        if derived:
+            if isinstance(derived, dict):
+                # Python dictionary
+                is_valid_derived = True
+                if derived.get('scale'):
+                    items_with_scale_info += 1
+                if derived.get('interpretations'):
+                    items_with_interpretations += 1
+            elif hasattr(derived, 'to_py'):
+                # JavaScript proxy object - convert to Python
+                try:
+                    derived_py = derived.to_py()
+                    if isinstance(derived_py, dict):
+                        is_valid_derived = True
+                        if derived_py.get('scale'):
+                            items_with_scale_info += 1
+                        if derived_py.get('interpretations'):
+                            items_with_interpretations += 1
+                except:
+                    pass
+            elif hasattr(derived, '__getitem__'):
+                # Try to access as object with properties
+                try:
+                    is_valid_derived = True
+                    if hasattr(derived, 'scale') and derived.scale:
+                        items_with_scale_info += 1
+                    if hasattr(derived, 'interpretations') and derived.interpretations:
+                        items_with_interpretations += 1
+                except:
+                    pass
+        
+        if not is_valid_derived:
             items_with_empty_derived.append({
                 'item_index': idx,
                 'questionnaire': item.get('questionnaire', 'Unknown'),
@@ -274,7 +344,12 @@ def validate_preprocessed_data(items: List[Dict]) -> Dict[str, Any]:
         "items_with_derived": final_items_with_derived,
         "items_with_empty_derived": len(items_with_empty_derived),
         "items_with_scale_info": items_with_scale_info,
-        "items_with_interpretations": items_with_interpretations
+        "items_with_interpretations": items_with_interpretations,
+        "debug_info": {
+            "total_data_items": len(data_items),
+            "sample_items": debug_samples,
+            "calculation": f"{len(data_items)} total - {len(items_with_empty_derived)} empty = {final_items_with_derived} with derived"
+        }
     }
     
     if items_with_empty_derived:
