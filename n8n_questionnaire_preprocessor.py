@@ -47,7 +47,18 @@ QUESTIONNAIRE_CUTOFFS = {
     "pedsql": {
         "scale_range": "0-100 transformed", 
         "direction": "lower worse",
-        "cutoffs": {"impaired_hrqol": 70}
+        "cutoffs": {
+            "typical_range": 80,
+            "slightly_below_norms": 70, 
+            "noticeably_below_average": 60,
+            "significantly_impaired": 60
+        },
+        "interpretation_guide": {
+            "≥80": "Typical range - Normal wellbeing",
+            "70-79": "Slightly below norms - Mild emotional or adjustment difficulties", 
+            "60-69": "Noticeably below average - Possible clinical concern — monitor or screen further",
+            "<60": "Significantly impaired - Likely emotional/mental-health problems"
+        }
     },
     "ces-dc": {
         "scale_range": "0-60",
@@ -167,11 +178,15 @@ def promis_severity(t_score: float) -> str:
         return 'severe'
 
 def pedsql_flag(score: float) -> str:
-    """PedsQL quality of life flag (0-100, lower worse)"""
-    if score < 70:
-        return 'possible impaired HRQoL (<70)'
+    """PedsQL quality of life flag (0-100, lower worse) - Updated with reference guidelines"""
+    if score >= 80:
+        return "typical range"
+    elif score >= 70:
+        return "slightly below norms"
+    elif score >= 60:
+        return "noticeably below average"
     else:
-        return ''
+        return "significantly impaired"
 
 def rses_band(score: int) -> str:
     """Rosenberg Self-Esteem Scale bands"""
@@ -495,10 +510,10 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
             result['derived']['severity_level'] = result['severity']
             result['clinical_flags'].append(f'PROMIS raw total: {int(total)}. Convert to T-scores using official tables for clinical interpretation.')
         
-        # PedsQL - Proper scoring with reverse transformation
+        # PedsQL - Calculate both Total Score and Psychosocial Score for ratio-based interpretation
         elif 'pedsql' in name:
-            result['derived']['scale'] = 'PedsQL (0-100, higher better)'
-            result['derived']['note'] = 'Scores reverse-transformed: 0→100, 1→75, 2→50, 3→25, 4→0'
+            result['derived']['scale'] = 'PedsQL Psychosocial/Total Score (0-100, higher better)'
+            result['derived']['note'] = 'Scores reverse-transformed: 0→100, 1→75, 2→50, 3→25, 4→0. Interpretation based on Psychosocial/Total Score ratio'
             
             # Transform raw scores (0-4) to PedsQL scale (0-100)
             def transform_pedsql_score(raw_score):
@@ -506,15 +521,15 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
                 transformation_map = {0: 100, 1: 75, 2: 50, 3: 25, 4: 0}
                 return transformation_map.get(int(raw_score), None)
             
-            # Group responses by subscale/dimension
-            subscales = {
+            # Group responses by ALL dimensions (Physical + Psychosocial)
+            all_dimensions = {
                 'Physical': [],
                 'Emotional': [],
                 'Social': [],
                 'School': []
             }
             
-            # Categorize responses by dimension
+            # Categorize responses by dimension (all dimensions)
             for response in group['responses']:
                 raw_score = response.get('answer', 0)
                 dimension = response.get('dimension', '').lower()
@@ -522,107 +537,124 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
                 
                 if transformed_score is not None:  # Valid score (0-4 range)
                     if 'physical' in dimension:
-                        subscales['Physical'].append(transformed_score)
+                        all_dimensions['Physical'].append(transformed_score)
                     elif 'emotional' in dimension:
-                        subscales['Emotional'].append(transformed_score)
+                        all_dimensions['Emotional'].append(transformed_score)
                     elif 'social' in dimension:
-                        subscales['Social'].append(transformed_score)
+                        all_dimensions['Social'].append(transformed_score)
                     elif 'school' in dimension:
-                        subscales['School'].append(transformed_score)
-                    # No fallback - items without proper dimension are ignored
+                        all_dimensions['School'].append(transformed_score)
             
-            # Define expected items per subscale for PedsQL
-            PEDSQL_SUBSCALE_ITEMS = {
+            # Define expected items per dimension
+            PEDSQL_DIMENSION_ITEMS = {
                 'Physical': 8,      # Physical Functioning (8 items)
                 'Emotional': 5,     # Emotional Functioning (5 items) 
                 'Social': 5,        # Social Functioning (5 items)
                 'School': 5         # School Functioning (5 items)
             }
             
-            # Calculate subscale scores (mean of transformed scores)
-            subscale_scores = {}
-            valid_subscales = []
+            # Calculate dimension scores
+            dimension_scores = {}
+            all_total_scores = []
+            all_psychosocial_scores = []
             
-            for subscale_name, scores in subscales.items():
-                expected_items = PEDSQL_SUBSCALE_ITEMS.get(subscale_name, len(scores))
+            for dimension_name, scores in all_dimensions.items():
+                expected_items = PEDSQL_DIMENSION_ITEMS.get(dimension_name, len(scores))
                 answered_items = len(scores)
                 
                 if answered_items >= (expected_items * 0.5):  # At least 50% answered
-                    subscale_mean = sum(scores) / len(scores)
-                    subscale_scores[subscale_name] = {
-                        'score': round(subscale_mean, 2),
+                    dimension_mean = sum(scores) / len(scores)
+                    dimension_scores[dimension_name] = {
+                        'score': round(dimension_mean, 2),
                         'items_answered': answered_items,
                         'items_expected': expected_items,
-                        'completion_rate': round((answered_items / expected_items) * 100, 1),
-                        'transformed_scores': scores
+                        'completion_rate': round((answered_items / expected_items) * 100, 1)
                     }
-                    valid_subscales.append(subscale_name)
+                    # Add all individual scores to total pool
+                    all_total_scores.extend(scores)
+                    
+                    # Add psychosocial scores (exclude Physical)
+                    if dimension_name in ['Emotional', 'Social', 'School']:
+                        all_psychosocial_scores.extend(scores)
                 else:
                     # Don't calculate score - insufficient data
-                    subscale_scores[subscale_name] = {
+                    dimension_scores[dimension_name] = {
                         'score': None,
                         'items_answered': answered_items,
                         'items_expected': expected_items,
                         'completion_rate': round((answered_items / expected_items) * 100, 1),
-                        'reason': 'Insufficient data (>50% missing)',
-                        'transformed_scores': scores
+                        'reason': 'Insufficient data (>50% missing)'
                     }
             
-            # Calculate summary scores (only from valid subscales that passed 50% rule)
-            all_transformed_scores = []
-            psychosocial_scores = []
-            
-            for subscale_name, subscale_data in subscale_scores.items():
-                # Only include scores from subscales that have valid scores (passed 50% rule)
-                if subscale_data.get('score') is not None:
-                    scores = subscale_data['transformed_scores']
-                    all_transformed_scores.extend(scores)
-                    
-                    # Psychosocial includes Emotional, Social, School (not Physical)
-                    if subscale_name in ['Emotional', 'Social', 'School']:
-                        psychosocial_scores.extend(scores)
-            
             # Store detailed results
-            result['derived']['subscale_scores'] = subscale_scores
+            result['derived']['dimension_scores'] = dimension_scores
             result['derived']['raw_total'] = int(total)  # Keep original sum for reference
             
-            # Calculate main scores
-            if all_transformed_scores:
-                total_scale_score = sum(all_transformed_scores) / len(all_transformed_scores)
-                result['derived']['total_scale_score'] = round(total_scale_score, 2)
-                result['derived']['total_score'] = round(total_scale_score, 2)  # For consistency
+            # Calculate Total Score and Psychosocial Score
+            if all_total_scores and all_psychosocial_scores:
+                total_score = sum(all_total_scores) / len(all_total_scores)
+                psychosocial_score = sum(all_psychosocial_scores) / len(all_psychosocial_scores)
                 
-                # Physical Health Summary (same as Physical subscale, if valid)
-                if 'Physical' in subscale_scores and subscale_scores['Physical'].get('score') is not None:
-                    result['derived']['physical_health_summary'] = subscale_scores['Physical']['score']
+                # Calculate Psychosocial/Total Score ratio (psychosocial score divided by total score as percentage)
+                psychosocial_total_ratio = (psychosocial_score / total_score) * 100 if total_score > 0 else 0
                 
-                # Psychosocial Health Summary
-                if psychosocial_scores:
-                    psychosocial_summary = sum(psychosocial_scores) / len(psychosocial_scores)
-                    result['derived']['psychosocial_health_summary'] = round(psychosocial_summary, 2)
+                result['derived']['total_score'] = round(total_score, 2)
+                result['derived']['psychosocial_score'] = round(psychosocial_score, 2)
+                result['derived']['psychosocial_total_ratio'] = round(psychosocial_total_ratio, 2)
                 
-                # Set severity based on total score
-                if total_scale_score < 70:
-                    result['severity'] = 'possible impaired HRQoL'
-                    result['clinical_flags'].append(f'PedsQL Total Score {total_scale_score:.1f} < 70 (possible impaired HRQoL)')
-                elif total_scale_score <= 78:
-                    result['severity'] = 'borderline HRQoL'
-                    result['clinical_flags'].append(f'PedsQL Total Score {total_scale_score:.1f} ≤ 78 (borderline HRQoL)')
-                else:
-                    result['severity'] = 'typical range'
+                # PedsQL interpretation function based on reference table
+                def get_pedsql_interpretation(score):
+                    """Get PedsQL interpretation based on reference table for Psychosocial/Total Score"""
+                    if score >= 80:
+                        return {
+                            'severity': 'typical range',
+                            'interpretation': 'Typical range',
+                            'mental_health_status': 'Normal wellbeing'
+                        }
+                    elif score >= 70:
+                        return {
+                            'severity': 'slightly below norms',
+                            'interpretation': 'Slightly below norms', 
+                            'mental_health_status': 'Mild emotional or adjustment difficulties'
+                        }
+                    elif score >= 60:
+                        return {
+                            'severity': 'noticeably below average',
+                            'interpretation': 'Noticeably below average',
+                            'mental_health_status': 'Possible clinical concern — monitor or screen further'
+                        }
+                    else:  # < 60
+                        return {
+                            'severity': 'significantly impaired',
+                            'interpretation': 'Significantly impaired',
+                            'mental_health_status': 'Likely emotional/mental-health problems'
+                        }
                 
+                # Apply interpretation to Psychosocial/Total Score ratio
+                ratio_interpretation = get_pedsql_interpretation(psychosocial_total_ratio)
+                result['severity'] = ratio_interpretation['severity']
                 result['derived']['severity_level'] = result['severity']
+                result['derived']['interpretation'] = ratio_interpretation['interpretation']
+                result['derived']['mental_health_status'] = ratio_interpretation['mental_health_status']
                 
-                # Add subscale-specific flags
-                for subscale_name, subscale_data in subscale_scores.items():
-                    subscale_score = subscale_data.get('score')
-                    if subscale_score is not None:
-                        if subscale_score < 70:
-                            result['clinical_flags'].append(f'PedsQL {subscale_name} {subscale_score:.1f} < 70 (possible impairment)')
-                    else:
-                        # Flag subscales with insufficient data
-                        completion_rate = subscale_data.get('completion_rate', 0)
-                        result['clinical_flags'].append(f'PedsQL {subscale_name}: Insufficient data ({completion_rate}% complete, need ≥50%)')
+                # Add clinical flags based on Psychosocial/Total Score ratio interpretation
+                if psychosocial_total_ratio < 60:
+                    result['clinical_flags'].append(f'PedsQL Psychosocial/Total Score {psychosocial_total_ratio:.1f} < 60 (significantly impaired - likely emotional/mental-health problems)')
+                elif psychosocial_total_ratio < 70:
+                    result['clinical_flags'].append(f'PedsQL Psychosocial/Total Score {psychosocial_total_ratio:.1f} (60-69: noticeably below average - possible clinical concern)')
+                elif psychosocial_total_ratio < 80:
+                    result['clinical_flags'].append(f'PedsQL Psychosocial/Total Score {psychosocial_total_ratio:.1f} (70-79: slightly below norms - mild emotional/adjustment difficulties)')
+                
+                # Add component scores for reference
+                result['clinical_flags'].append(f'PedsQL Total Score: {total_score:.1f}, Psychosocial Score: {psychosocial_score:.1f}, Ratio: {psychosocial_total_ratio:.1f}%')
+                
+                # Add flags for dimensions with insufficient data
+                for dimension_name, dimension_data in dimension_scores.items():
+                    dimension_score = dimension_data.get('score')
+                    if dimension_score is None:
+                        # Flag dimensions with insufficient data
+                        completion_rate = dimension_data.get('completion_rate', 0)
+                        result['clinical_flags'].append(f'PedsQL {dimension_name}: Insufficient data ({completion_rate}% complete, need ≥50%)')
             
             else:
                 result['severity'] = 'insufficient valid responses'
