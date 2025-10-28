@@ -487,28 +487,172 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         
         # PROMIS (Depression, Anxiety, Life Satisfaction)
         elif 'promis' in name:
+            # T-score conversion tables
+            PROMIS_DEPRESSION_PEDIATRIC = {
+                8: 39.9, 9: 46.9, 10: 49.3, 11: 51.0, 12: 52.4, 13: 53.6, 14: 54.6, 15: 55.6,
+                16: 56.5, 17: 57.4, 18: 58.3, 19: 59.1, 20: 60.0, 21: 60.8, 22: 61.7, 23: 62.5,
+                24: 63.3, 25: 64.1, 26: 64.9, 27: 65.7, 28: 66.5, 29: 67.3, 30: 68.0, 31: 68.8,
+                32: 69.6, 33: 70.4, 34: 71.2, 35: 72.1, 36: 73.1, 37: 74.2, 38: 75.5, 39: 77.2, 40: 80.3
+            }
+            
+            PROMIS_ANXIETY_PEDIATRIC = {
+                8: 39.0, 9: 45.4, 10: 47.8, 11: 49.6, 12: 51.0, 13: 52.2, 14: 53.3, 15: 54.4,
+                16: 55.3, 17: 56.3, 18: 57.2, 19: 58.1, 20: 59.0, 21: 59.9, 22: 60.8, 23: 61.7,
+                24: 62.6, 25: 63.4, 26: 64.3, 27: 65.1, 28: 65.9, 29: 66.8, 30: 67.6, 31: 68.4,
+                32: 69.2, 33: 70.0, 34: 70.9, 35: 71.8, 36: 72.8, 37: 73.9, 38: 75.2, 39: 76.7, 40: 79.8
+            }
+            
+            PROMIS_LIFE_SATISFACTION_PEDIATRIC = {
+                8: 20.5, 9: 23.6, 10: 25.3, 11: 26.7, 12: 27.9, 13: 28.9, 14: 29.9, 15: 30.7,
+                16: 31.6, 17: 32.5, 18: 33.3, 19: 34.1, 20: 34.9, 21: 35.8, 22: 36.6, 23: 37.4,
+                24: 38.3, 25: 39.1, 26: 40.0, 27: 40.9, 28: 41.9, 29: 42.9, 30: 43.9, 31: 44.9,
+                32: 45.9, 33: 46.9, 34: 48.1, 35: 49.2, 36: 50.5, 37: 52.0, 38: 53.9, 39: 56.7, 40: 62.5
+            }
+            
+            PROMIS_DEPRESSION_PARENT = {
+                6: 40.8, 7: 48.2, 8: 51.1, 9: 53.2, 10: 54.9, 11: 56.4, 12: 57.9, 13: 59.2,
+                14: 60.6, 15: 61.9, 16: 63.2, 17: 64.6, 18: 65.9, 19: 67.1, 20: 68.3, 21: 69.6,
+                22: 70.7, 23: 71.9, 24: 73.0, 25: 74.2, 26: 75.4, 27: 76.7, 28: 78.2, 29: 79.8, 30: 82.7
+            }
+            
+            PROMIS_ANXIETY_PARENT = {
+                8: 38.8, 9: 45.2, 10: 48.0, 11: 49.9, 12: 51.5, 13: 52.8, 14: 54.0, 15: 55.2,
+                16: 56.3, 17: 57.3, 18: 58.4, 19: 59.4, 20: 60.4, 21: 61.4, 22: 62.5, 23: 63.4,
+                24: 64.4, 25: 65.3, 26: 66.3, 27: 67.2, 28: 68.1, 29: 69.0, 30: 69.9, 31: 70.8,
+                32: 71.7, 33: 72.6, 34: 73.5, 35: 74.5, 36: 75.6, 37: 76.8, 38: 78.2, 39: 80.0, 40: 82.7
+            }
+            
+            PROMIS_LIFE_SATISFACTION_PARENT = {
+                8: 18.5, 9: 21.4, 10: 22.9, 11: 24.1, 12: 25.2, 13: 26.1, 14: 27.0, 15: 27.8,
+                16: 28.6, 17: 29.4, 18: 30.2, 19: 31.0, 20: 31.8, 21: 32.7, 22: 33.5, 23: 34.4,
+                24: 35.3, 25: 36.2, 26: 37.2, 27: 38.2, 28: 39.2, 29: 40.3, 30: 41.5, 31: 42.7,
+                32: 43.9, 33: 45.1, 34: 46.4, 35: 47.7, 36: 49.1, 37: 50.6, 38: 52.5, 39: 55.2, 40: 61.5
+            }
+            
+            def get_promis_t_score(raw_total, conversion_table):
+                """Convert raw PROMIS score to T-score using lookup table"""
+                return conversion_table.get(raw_total, None)
+            
+            def interpret_promis_t_score(t_score, measure_type):
+                """Interpret PROMIS T-score based on measure type"""
+                if measure_type in ['depression', 'anxiety']:
+                    # Higher scores = worse (negative measures)
+                    if t_score <= 50:
+                        return {
+                            'severity': 'within normal limits',
+                            'interpretation': 'Within Normal Limits'
+                        }
+                    elif t_score <= 55:
+                        return {
+                            'severity': 'mild',
+                            'interpretation': 'Mild'
+                        }
+                    elif t_score <= 65:
+                        return {
+                            'severity': 'moderate',
+                            'interpretation': 'Moderate'
+                        }
+                    else:
+                        return {
+                            'severity': 'severe',
+                            'interpretation': 'Severe'
+                        }
+                else:  # life satisfaction
+                    # Higher scores = better (positive measure)
+                    if t_score >= 70:
+                        return {
+                            'severity': 'very high',
+                            'interpretation': 'Very High'
+                        }
+                    elif t_score >= 60:
+                        return {
+                            'severity': 'high',
+                            'interpretation': 'High'
+                        }
+                    elif t_score >= 40:
+                        return {
+                            'severity': 'average',
+                            'interpretation': 'Average'
+                        }
+                    elif t_score >= 30:
+                        return {
+                            'severity': 'low',
+                            'interpretation': 'Low'
+                        }
+                    else:
+                        return {
+                            'severity': 'very low',
+                            'interpretation': 'Very Low'
+                        }
+            
+            # Determine measure type and version
+            is_parent = 'parent' in name.lower()
+            measure_type = None
+            conversion_table = None
+            
             if 'depression' in name:
-                result['derived']['scale'] = 'PROMIS Depression T-score (mean 50, SD 10, higher worse)'
-                result['derived']['note'] = 'Higher scores indicate more depression symptoms'
+                measure_type = 'depression'
+                conversion_table = PROMIS_DEPRESSION_PARENT if is_parent else PROMIS_DEPRESSION_PEDIATRIC
+                result['derived']['scale'] = f'PROMIS Depression {"Parent Proxy" if is_parent else "Pediatric"} T-score (mean 50, SD 10, higher worse)'
+                result['derived']['note'] = 'Higher T-scores indicate more depression symptoms'
             elif 'anxiety' in name:
-                result['derived']['scale'] = 'PROMIS Anxiety T-score (mean 50, SD 10, higher worse)'
-                result['derived']['note'] = 'Higher scores indicate more anxiety symptoms'
+                measure_type = 'anxiety'
+                conversion_table = PROMIS_ANXIETY_PARENT if is_parent else PROMIS_ANXIETY_PEDIATRIC
+                result['derived']['scale'] = f'PROMIS Anxiety {"Parent Proxy" if is_parent else "Pediatric"} T-score (mean 50, SD 10, higher worse)'
+                result['derived']['note'] = 'Higher T-scores indicate more anxiety symptoms'
             elif 'life' in name or 'satisfaction' in name:
-                result['derived']['scale'] = 'PROMIS Life Satisfaction T-score (mean 50, SD 10, lower worse)'
-                result['derived']['note'] = 'Higher scores indicate better life satisfaction'
+                measure_type = 'life_satisfaction'
+                conversion_table = PROMIS_LIFE_SATISFACTION_PARENT if is_parent else PROMIS_LIFE_SATISFACTION_PEDIATRIC
+                result['derived']['scale'] = f'PROMIS Life Satisfaction {"Parent Proxy" if is_parent else "Pediatric"} T-score (mean 50, SD 10, higher better)'
+                result['derived']['note'] = 'Higher T-scores indicate better life satisfaction'
             else:
                 result['derived']['scale'] = 'PROMIS Pediatric T-score (mean 50, SD 10)'
-                result['derived']['note'] = 'Item labels vary by form; interpretation relies on T-scores'
+                result['derived']['note'] = 'Unknown PROMIS measure - cannot convert to T-score'
             
-            # For PROMIS, we need actual T-scores from the answer field or calculate from raw scores
-            # Since the Excel has raw answer values, we'll provide a note about T-score conversion
-            avg_score = total / len(group['responses']) if group['responses'] else 0
+            # Store raw scores
             result['derived']['raw_score'] = int(total)
-            result['derived']['total_score'] = int(total)  # Add total_score for consistency
-            result['derived']['average_response'] = round(avg_score, 2)
-            result['severity'] = 'requires T-score conversion for clinical interpretation'
-            result['derived']['severity_level'] = result['severity']
-            result['clinical_flags'].append(f'PROMIS raw total: {int(total)}. Convert to T-scores using official tables for clinical interpretation.')
+            result['derived']['total_score'] = int(total)
+            
+            # Convert to T-score if table available
+            if conversion_table and measure_type:
+                t_score = get_promis_t_score(int(total), conversion_table)
+                
+                if t_score is not None:
+                    result['derived']['t_score'] = round(t_score, 1)
+                    
+                    # Get interpretation
+                    interpretation = interpret_promis_t_score(t_score, measure_type)
+                    result['severity'] = interpretation['severity']
+                    result['derived']['severity_level'] = result['severity']
+                    result['derived']['interpretation'] = interpretation['interpretation']
+                    
+                    # Add clinical flags based on T-score thresholds
+                    if measure_type in ['depression', 'anxiety']:
+                        if t_score > 65:
+                            result['clinical_flags'].append(f'PROMIS {measure_type.title()} T-score {t_score:.1f} (Severe - significant clinical concern)')
+                        elif t_score > 55:
+                            result['clinical_flags'].append(f'PROMIS {measure_type.title()} T-score {t_score:.1f} (Moderate - clinical attention warranted)')
+                        elif t_score > 50:
+                            result['clinical_flags'].append(f'PROMIS {measure_type.title()} T-score {t_score:.1f} (Mild - monitor)')
+                    else:  # life satisfaction
+                        if t_score < 30:
+                            result['clinical_flags'].append(f'PROMIS Life Satisfaction T-score {t_score:.1f} (Very Low - significant concern)')
+                        elif t_score < 40:
+                            result['clinical_flags'].append(f'PROMIS Life Satisfaction T-score {t_score:.1f} (Low - below average)')
+                    
+                    result['clinical_flags'].append(f'PROMIS {measure_type.replace("_", " ").title()}: Raw={int(total)}, T-score={t_score:.1f} ({interpretation["interpretation"]})')
+                
+                else:
+                    # Raw score outside conversion table range
+                    result['severity'] = 'raw score outside conversion range'
+                    result['derived']['severity_level'] = result['severity']
+                    result['clinical_flags'].append(f'PROMIS raw total {int(total)} outside conversion table range (8-40)')
+            
+            else:
+                # No conversion table available
+                result['severity'] = 'unknown PROMIS measure'
+                result['derived']['severity_level'] = result['severity']
+                result['clinical_flags'].append(f'PROMIS raw total: {int(total)}. Unable to convert - unknown measure type.')
         
         # PedsQL - Calculate both Total Score and Psychosocial Score for ratio-based interpretation
         elif 'pedsql' in name:
