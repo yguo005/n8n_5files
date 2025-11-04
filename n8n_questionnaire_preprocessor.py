@@ -44,22 +44,6 @@ QUESTIONNAIRE_CUTOFFS = {
         "direction": "lower worse",
         "cutoffs": {"poor": 40, "below_average": 45}
     },
-    "pedsql": {
-        "scale_range": "0-100 transformed", 
-        "direction": "lower worse",
-        "cutoffs": {
-            "typical_range": 80,
-            "slightly_below_norms": 70, 
-            "noticeably_below_average": 60,
-            "significantly_impaired": 60
-        },
-        "interpretation_guide": {
-            "≥80": "Typical range - Normal wellbeing",
-            "70-79": "Slightly below norms - Mild emotional or adjustment difficulties", 
-            "60-69": "Noticeably below average - Possible clinical concern — monitor or screen further",
-            "<60": "Significantly impaired - Likely emotional/mental-health problems"
-        }
-    },
     "ces-dc": {
         "scale_range": "0-60",
         "direction": "higher worse",
@@ -176,17 +160,6 @@ def promis_severity(t_score: float) -> str:
         return 'moderate'
     else:
         return 'severe'
-
-def pedsql_flag(score: float) -> str:
-    """PedsQL quality of life flag (0-100, lower worse) - Updated with reference guidelines"""
-    if score >= 80:
-        return "typical range"
-    elif score >= 70:
-        return "slightly below norms"
-    elif score >= 60:
-        return "noticeably below average"
-    else:
-        return "significantly impaired"
 
 def rses_band(score: int) -> str:
     """Rosenberg Self-Esteem Scale bands"""
@@ -665,6 +638,14 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
                 transformation_map = {0: 100, 1: 75, 2: 50, 3: 25, 4: 0}
                 return transformation_map.get(int(raw_score), None)
             
+            # Extract question number from question text
+            def get_question_number(question_text):
+                """Extract question number from question text (e.g., '1. Question text' -> 1)"""
+                match = re.match(r'^(\d+)', str(question_text).strip())
+                if match:
+                    return int(match.group(1))
+                return None
+            
             # Group responses by ALL dimensions (Physical + Psychosocial)
             all_dimensions = {
                 'Physical': [],
@@ -673,21 +654,25 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
                 'School': []
             }
             
-            # Categorize responses by dimension (all dimensions)
+            # Categorize responses by question number
+            # Questions 1-8: Physical, 9-13: Emotional, 14-18: Social, 19-23: School
             for response in group['responses']:
                 raw_score = response.get('answer', 0)
-                dimension = response.get('dimension', '').lower()
+                question_text = response.get('question', '')
                 transformed_score = transform_pedsql_score(raw_score)
                 
                 if transformed_score is not None:  # Valid score (0-4 range)
-                    if 'physical' in dimension:
-                        all_dimensions['Physical'].append(transformed_score)
-                    elif 'emotional' in dimension:
-                        all_dimensions['Emotional'].append(transformed_score)
-                    elif 'social' in dimension:
-                        all_dimensions['Social'].append(transformed_score)
-                    elif 'school' in dimension:
-                        all_dimensions['School'].append(transformed_score)
+                    question_num = get_question_number(question_text)
+                    
+                    if question_num is not None:
+                        if 1 <= question_num <= 8:
+                            all_dimensions['Physical'].append(transformed_score)
+                        elif 9 <= question_num <= 13:
+                            all_dimensions['Emotional'].append(transformed_score)
+                        elif 14 <= question_num <= 18:
+                            all_dimensions['Social'].append(transformed_score)
+                        elif 19 <= question_num <= 23:
+                            all_dimensions['School'].append(transformed_score)
             
             # Define expected items per dimension
             PEDSQL_DIMENSION_ITEMS = {
