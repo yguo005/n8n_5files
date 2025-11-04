@@ -1,9 +1,6 @@
-#!/usr/bin/env python3
-"""
-n8n Questionnaire Trend Analyzer
-Analyzes score changes over time for mental health questionnaires
-Based on administration frequency and clinical significance guidelines
-"""
+# n8n Questionnaire Trend Analyzer
+# Analyzes score changes over time for mental health questionnaires
+# Based on administration frequency and clinical significance guidelines
 
 import json
 from datetime import datetime, timedelta
@@ -351,14 +348,28 @@ def analyze_questionnaire_trends(processed_data: List[Dict]) -> Dict[str, Any]:
         initial = sorted_results[0]
         latest = sorted_results[-1]
         
-        # Get appropriate score for analysis
-        initial_score = initial.get('raw_total', 0)
-        latest_score = latest.get('raw_total', 0)
+        # Get appropriate score for analysis based on questionnaire type
+        # PedsQL: Use transformed total_score (0-100 scale) instead of raw sum
+        # PROMIS: Use T-score instead of raw sum
+        # WHO-5: Use index score (0-100) instead of raw sum
+        # Others: Use raw_total
         
-        # For WHO-5, use the index score if available
-        if q_key == "who-5":
-            initial_score = initial.get('who5_index', initial_score * 4)
-            latest_score = latest.get('who5_index', latest_score * 4)
+        if q_key == "pedsql":
+            # PedsQL stores transformed scores in derived
+            initial_score = initial.get('derived', {}).get('total_score', initial.get('raw_total', 0))
+            latest_score = latest.get('derived', {}).get('total_score', latest.get('raw_total', 0))
+        elif q_key == "promis":
+            # PROMIS stores T-scores in derived
+            initial_score = initial.get('derived', {}).get('t_score', initial.get('raw_total', 0))
+            latest_score = latest.get('derived', {}).get('t_score', latest.get('raw_total', 0))
+        elif q_key == "who-5":
+            # WHO-5 uses index score (0-100)
+            initial_score = initial.get('who5_index', initial.get('raw_total', 0) * 4)
+            latest_score = latest.get('who5_index', latest.get('raw_total', 0) * 4)
+        else:
+            # All other questionnaires use raw_total
+            initial_score = initial.get('raw_total', 0)
+            latest_score = latest.get('raw_total', 0)
         
         # Calculate trend
         trend_analysis = determine_trend_direction(
@@ -370,9 +381,15 @@ def analyze_questionnaire_trends(processed_data: List[Dict]) -> Dict[str, Any]:
         # Build history
         history = []
         for result in sorted_results:
-            score = result.get('raw_total', 0)
-            if q_key == "who-5":
-                score = result.get('who5_index', score * 4)
+            # Use same score extraction logic as main analysis
+            if q_key == "pedsql":
+                score = result.get('derived', {}).get('total_score', result.get('raw_total', 0))
+            elif q_key == "promis":
+                score = result.get('derived', {}).get('t_score', result.get('raw_total', 0))
+            elif q_key == "who-5":
+                score = result.get('who5_index', result.get('raw_total', 0) * 4)
+            else:
+                score = result.get('raw_total', 0)
                 
             history.append({
                 "date": result.get('date', ''),

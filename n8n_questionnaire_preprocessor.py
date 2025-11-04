@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
-"""
-n8n Questionnaire Preprocessor (Python)
-Converts raw questionnaire data into structured, interpreted results for LLM processing
-"""
+# n8n Questionnaire Preprocessor (Python)
+# Converts raw questionnaire data into structured, interpreted results for LLM processing
 
 import json
 import re
@@ -330,10 +327,13 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         # Skip rows with NaN/None/empty questionnaire (metadata rows)
         if not questionnaire or questionnaire.lower() in ['nan', 'none', '<na>', 'null']:
             continue
+        
+        # Try both 'timepoint' (singular) and 'timepoints' (plural) for flexibility
+        timepoint_value = json_data.get('timepoint', json_data.get('timepoints', 0))
             
         row = {
             'questionnaire': questionnaire,
-            'timepoint': safe_round(json_data.get('timepoints', 0)),  # Use 'timepoints' as primary field
+            'timepoint': safe_round(timepoint_value),
             'date': to_iso_date(json_data.get('date')),
             'question': str(json_data.get('question', '')).strip(),
             'answer_int': safe_number(json_data.get('answer', 0)),
