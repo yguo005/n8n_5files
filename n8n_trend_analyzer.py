@@ -36,6 +36,35 @@ TREND_GUIDELINES = {
         "improvement_direction": "decrease",  # Lower T-scores = better
         "cutoffs": {"normal": 55, "mild": 60, "moderate": 70, "severe": 70}
     },
+    # More specific PROMIS measures
+    "promis-depression": {
+        "name": "PROMIS Depression",
+        "frequency": "every session, 4-6 weeks",
+        "sensitivity": "sensitive to short-term changes in mood",
+        "improvement_direction": "decrease",  # Lower T-scores = better
+        "cutoffs": {"normal": 55, "mild": 60, "moderate": 70, "severe": 70}
+    },
+    "promis-anxiety": {
+        "name": "PROMIS Anxiety",
+        "frequency": "every session, 4-6 weeks",
+        "sensitivity": "sensitive to short-term changes in mood",
+        "improvement_direction": "decrease",  # Lower T-scores = better
+        "cutoffs": {"normal": 55, "mild": 60, "moderate": 70, "severe": 70}
+    },
+    "promis-life": {
+        "name": "PROMIS Life Satisfaction",
+        "frequency": "every session, 4-6 weeks",
+        "sensitivity": "sensitive to short-term changes in wellbeing",
+        "improvement_direction": "increase",  # Higher T-scores = better
+        "cutoffs": {"below_average": 45, "poor": 40}
+    },
+    "promis-physical": {
+        "name": "PROMIS Physical Function",
+        "frequency": "every session, 4-6 weeks",
+        "sensitivity": "sensitive to short-term changes in function",
+        "improvement_direction": "increase",  # Higher T-scores = better
+        "cutoffs": {}
+    },
     "pedsql": {
         "name": "PedsQL",
         "frequency": "every 3-6 months",
@@ -83,6 +112,18 @@ TREND_GUIDELINES = {
 def get_questionnaire_key(questionnaire_name: str) -> str:
     """Extract questionnaire key from full name"""
     name = questionnaire_name.lower().strip()
+    # Handle PROMIS subtypes explicitly first
+    if "promis" in name:
+        if ("life" in name) or ("satisfaction" in name):
+            return "promis-life"
+        if ("physical" in name) or ("function" in name):
+            return "promis-physical"
+        if "depression" in name:
+            return "promis-depression"
+        if "anxiety" in name:
+            return "promis-anxiety"
+        return "promis"
+    # Generic matching for other tools
     for key in TREND_GUIDELINES.keys():
         if key in name:
             return key
@@ -350,7 +391,7 @@ def analyze_questionnaire_trends(processed_data: List[Dict]) -> Dict[str, Any]:
         
         # Get appropriate score for analysis based on questionnaire type
         # PedsQL: Use transformed total_score (0-100 scale) instead of raw sum
-        # PROMIS: Use T-score instead of raw sum
+    # PROMIS: Use T-score instead of raw sum
         # WHO-5: Use index score (0-100) instead of raw sum
         # Others: Use raw_total
         
@@ -358,7 +399,7 @@ def analyze_questionnaire_trends(processed_data: List[Dict]) -> Dict[str, Any]:
             # PedsQL stores transformed scores in derived
             initial_score = initial.get('derived', {}).get('total_score', initial.get('raw_total', 0))
             latest_score = latest.get('derived', {}).get('total_score', latest.get('raw_total', 0))
-        elif q_key == "promis":
+        elif q_key.startswith("promis"):
             # PROMIS stores T-scores in derived
             initial_score = initial.get('derived', {}).get('t_score', initial.get('raw_total', 0))
             latest_score = latest.get('derived', {}).get('t_score', latest.get('raw_total', 0))
@@ -384,7 +425,7 @@ def analyze_questionnaire_trends(processed_data: List[Dict]) -> Dict[str, Any]:
             # Use same score extraction logic as main analysis
             if q_key == "pedsql":
                 score = result.get('derived', {}).get('total_score', result.get('raw_total', 0))
-            elif q_key == "promis":
+            elif q_key.startswith("promis"):
                 score = result.get('derived', {}).get('t_score', result.get('raw_total', 0))
             elif q_key == "who-5":
                 score = result.get('who5_index', result.get('raw_total', 0) * 4)
