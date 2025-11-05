@@ -310,8 +310,7 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         List of processed items with computed scores, severities, and flags
     """
     
-    # Debug logging for n8n
-    print(f"🔍 PREPROCESSING: Starting with {len(items)} raw items")
+    # Start preprocessing (quiet mode for n8n Code node)
     
     # Step A: Normalize individual rows
     rows = []
@@ -330,21 +329,25 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         
         # Try both 'timepoint' (singular) and 'timepoints' (plural) for flexibility
         timepoint_value = json_data.get('timepoint', json_data.get('timepoints', 0))
+        date_str = to_iso_date(json_data.get('date'))
+        dim_str = str(json_data.get('dimension', '')).strip()
+
+        # Note: We no longer skip rows that are missing timepoint/date/dimension; they will be included as-is
             
         row = {
             'questionnaire': questionnaire,
             'timepoint': safe_round(timepoint_value),
-            'date': to_iso_date(json_data.get('date')),
+            'date': date_str,
             'question': str(json_data.get('question', '')).strip(),
             'answer_int': safe_number(json_data.get('answer', 0)),
             'answer_raw': safe_number(json_data.get('answer', 0)),
-            'dimension': str(json_data.get('dimension', '')).strip(),
+            'dimension': dim_str,
             'free_text': str(json_data.get('free_text', '')).strip() if json_data.get('free_text') and not (isinstance(json_data.get('free_text'), float) and math.isnan(json_data.get('free_text'))) else '',
             'response_options': str(json_data.get('response_options', '')).strip()
         }
         rows.append(row)
     
-    print(f"🔍 PREPROCESSING: Found questionnaires: {dict(questionnaire_counts)}")
+    # Questionnaire counts collected (not printed in n8n)
     
     # Step B: Group by questionnaire + timepoint
     groups = {}
@@ -373,7 +376,7 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
             'response_options': row['response_options']
         })
     
-    print(f"🔍 PREPROCESSING: Created {len(groups)} groups: {list(groups.keys())}")
+    # Groups created (quiet)
     
     # Step C: Process each questionnaire group with cut-off focus
     results = []
@@ -902,7 +905,7 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         
         # PSC-17
         elif any(x in name for x in ['psc-17', 'psc17', 'psc 17', 'Pediatric Symptom Checklist – 17 (PSC-17)', 'psc']):
-            print(f"🔍 PSC-17 DEBUG: Processing {group['questionnaire']} with total={total}")
+            # PSC-17 processing (quiet)
             result['derived']['scale'] = 'PSC-17 (total ≥15 positive; subscales Internalizing ≥5, Attention ≥7, Externalizing ≥7)'
             result['derived']['total_score'] = int(total)
             result['severity'] = 'positive screen (≥15)' if total >= 15 else 'below threshold'
@@ -926,7 +929,7 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
         
         # All other questionnaires - use generic cut-off approach
         else:
-            print(f"🔍 GENERIC DEBUG: Processing {group['questionnaire']} with total={total}, name='{name}'")
+            # Generic processing (quiet)
             cutoffs = q_info.get('cutoffs', {})
             result['severity'] = 'see cut-offs for interpretation'
             result['derived']['scale'] = f'{group["questionnaire"]} ({q_info.get("scale_range", "unknown range")})'
@@ -960,33 +963,10 @@ def preprocess_questionnaire_data(items: List[Dict]) -> List[Dict]:
 # Check if running in n8n environment
 if 'items' in globals():
     try:
-        # Debug: Log what we received from previous node
-        print(f"🔍 n8n DEBUG: Received {len(items)} items from previous node")
-        
-        if items:
-            sample_item = items[0].get('json', {})
-            print(f"🔍 n8n DEBUG: Sample item keys: {list(sample_item.keys())}")
-            print(f"🔍 n8n DEBUG: Sample questionnaire: {sample_item.get('questionnaire', 'N/A')}")
-        
-        # Process the questionnaire data
         processed_items = preprocess_questionnaire_data(items)
-        
-        # Debug: Log results
-        print(f"✅ n8n SUCCESS: Generated {len(processed_items)} processed questionnaire groups")
-        
-        # Log summary of each processed group
-        for item in processed_items:
-            data = item['json']
-            flags_summary = f" | Flags: {len(data.get('clinical_flags', []))}" if data.get('clinical_flags') else ""
-            print(f"   → {data['questionnaire']} T{data['timepoint']}: score={data['raw_total']}, severity={data['severity']}{flags_summary}")
-        
-        # Return the processed items - n8n expects this format
         return processed_items
-
     except Exception as e:
-        # Return detailed error information for n8n debugging
         import traceback
-        
         error_details = {
             'error_message': str(e),
             'error_type': type(e).__name__,
@@ -995,13 +975,8 @@ if 'items' in globals():
             'debug_info': {
                 'items_available': 'items' in globals(),
                 'items_type': type(items).__name__ if 'items' in globals() else 'undefined',
-                'help': 'Check that this Code node is connected after a Spreadsheet File node with the first sheet data'
+                'help': 'Ensure this node receives a list of items with a json payload per row.'
             }
         }
-        
-        print(f"❌ n8n ERROR: {str(e)}")
-        print(f"🔍 n8n DEBUG: Error details logged in output")
-        
-        # Return error as JSON for next node
         return [{'json': error_details}]
 
