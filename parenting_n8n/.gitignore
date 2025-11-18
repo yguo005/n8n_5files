@@ -1,0 +1,14 @@
+# Large data and sensitive files
+# These should NOT be in the repository
+all_data.json
+response_data_*.json
+AI Workflow & Prompt Engineering.pdf
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS generated files
+.DS_Store

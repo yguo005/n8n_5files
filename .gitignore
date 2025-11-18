@@ -1,3 +1,16 @@
 .env
 __pycache__/
 .DS_Store
+venv/
+/.vscode/
+*.ipynb_checkpoints
+node_modules/
+*.log
+*.sqlite
+*.sqlite3
+*.pyc
+*.pyo
+*.pyd
+dist/
+build/
+coverage/
