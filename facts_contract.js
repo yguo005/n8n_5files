@@ -21,7 +21,8 @@ const DOMAIN_CONFIG = {
   depression: [
     { matcher: 'phq-9', label: 'PHQ-9', direction: 'higher worse', scoreField: 'raw_total' },
     { matcher: 'promis-depression', label: 'PROMIS Depression', direction: 'higher worse', scoreField: 'derived.t_score' },
-    { matcher: 'ces-dc', label: 'CES-DC', direction: 'higher worse', scoreField: 'raw_total' }
+    { matcher: 'ces-dc', label: 'CES-DC', direction: 'higher worse', scoreField: 'raw_total' },
+    { matcher: 'pedsql', label: 'PedsQL (Depression-related)', direction: 'lower worse', scoreField: 'derived.total_score', dimensionFilter: 'Yes' }
   ],
   anxiety_general: [
     { matcher: 'gad-7', label: 'GAD-7', direction: 'higher worse', scoreField: 'raw_total' },
@@ -35,7 +36,7 @@ const DOMAIN_CONFIG = {
   ],
   wellbeing: [
     { matcher: 'who-5', label: 'WHO-5', direction: 'lower worse', scoreField: 'derived.index_score' },
-    { matcher: 'pedsql', label: 'PedsQL', direction: 'lower worse', scoreField: 'derived.total_score' },
+    { matcher: 'pedsql', label: 'PedsQL (Non-depression)', direction: 'lower worse', scoreField: 'derived.total_score', dimensionFilter: 'No' },
     { matcher: 'promis-life', label: 'PROMIS Life Satisfaction', direction: 'lower worse', scoreField: 'derived.t_score' }
   ],
   behavior_externalizing: [
@@ -286,7 +287,69 @@ function analyzeDomainRisk(allRecords) {
 // SCORE EXTRACTION
 // =============================================================================
 
+/**
+ * Recalculate PedsQL score from filtered responses (depression-related only)
+ * This handles the case where we need to calculate score from dimension="Yes" items only
+ */
+function recalculatePedsQLFromFilteredResponses(record, dimensionFilter) {
+  const responses = record?.responses || [];
+  
+  // Filter responses by dimension
+  const filteredResponses = responses.filter(r => {
+    const dim = String(r.dimension || '').trim().toLowerCase();
+    return dim === dimensionFilter.toLowerCase();
+  });
+  
+  if (filteredResponses.length === 0) return null;
+  
+  // PedsQL transformation: 0→100, 1→75, 2→50, 3→25, 4→0
+  const transformMap = { 0: 100, 1: 75, 2: 50, 3: 25, 4: 0 };
+  
+  // Transform and calculate mean
+  const transformedScores = filteredResponses
+    .map(r => {
+      const raw = Number(r.answer || 0);
+      return transformMap[raw];
+    })
+    .filter(s => s !== undefined);
+  
+  if (transformedScores.length === 0) return null;
+  
+  const mean = transformedScores.reduce((sum, s) => sum + s, 0) / transformedScores.length;
+  return mean;
+}
+
+/**
+ * Extract score from record, optionally filtering by dimension
+ * @param {Object} record - The questionnaire record
+ * @param {Object} cfg - Configuration with optional dimensionFilter and matcher
+ * @returns {number|null} - The extracted score
+ */
 function extractScore(record, cfg) {
+  const matcher = (cfg?.matcher || '').toLowerCase();
+  const isPedsQL = matcher.includes('pedsql');
+  
+  // If dimension filter is specified for PedsQL, recalculate from filtered responses
+  if (cfg?.dimensionFilter && isPedsQL) {
+    const recalculated = recalculatePedsQLFromFilteredResponses(record, cfg.dimensionFilter);
+    if (recalculated !== null) return recalculated;
+    // If no matching responses found, return null
+    return null;
+  }
+  
+  // If dimension filter is specified for other questionnaires, check if record matches
+  if (cfg?.dimensionFilter && !isPedsQL) {
+    const responses = record?.responses || [];
+    const hasMatchingDimension = responses.some(r => {
+      const dim = String(r.dimension || '').trim().toLowerCase();
+      return dim === cfg.dimensionFilter.toLowerCase();
+    });
+    
+    // If no matching dimension found, return null
+    if (!hasMatchingDimension) return null;
+  }
+  
+  // Standard score extraction
   const candidates = [
     cfg?.scoreField ? getPath(record, cfg.scoreField) : null,
     record?.derived?.total_score,
@@ -303,12 +366,28 @@ function extractScore(record, cfg) {
 
 function buildSnapshot(record, cfg) {
   if (!record) return null;
-  return {
+  
+  const snapshot = {
     timepoint: parseNumber(record.timepoint),
     date: record.date || null,
     score: extractScore(record, cfg),
     severity: record.severity || record?.derived?.severity_level || null
   };
+  
+  // If dimension filter is specified, add metadata about filtered items
+  if (cfg?.dimensionFilter) {
+    const responses = record?.responses || [];
+    const matchingResponses = responses.filter(r => {
+      const dim = String(r.dimension || '').trim().toLowerCase();
+      return dim === cfg.dimensionFilter.toLowerCase();
+    });
+    
+    snapshot.dimensionFilter = cfg.dimensionFilter;
+    snapshot.filteredItemCount = matchingResponses.length;
+    snapshot.totalItemCount = responses.length;
+  }
+  
+  return snapshot;
 }
 
 // =============================================================================
