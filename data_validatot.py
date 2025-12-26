@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-Local Data Quality Validator
-Standalone version that can validate processed questionnaire data locally
+n8n Data Quality Validator & Checkpoint
+Validates preprocessed questionnaire data before trend analysis or LLM processing
+Use this as a checkpoint node between Preprocessor and Trend Analyzer
 """
-
 import json
-import argparse
-import sys
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -48,8 +46,27 @@ def validate_preprocessed_data(items: List[Dict]) -> Dict[str, Any]:
         validation_report["errors"].append("No data received - empty input")
         return validation_report
     
-    # Items are already in the correct format (not wrapped in 'json' key for local processing)
-    data_items = items
+    # Extract json data from items
+    data_items = []
+    print(f"🔍 DEBUG: Received {len(items)} items from preprocessor")
+    
+    for idx, item in enumerate(items):
+        json_data = item.get('json', {})
+        if json_data:
+            data_items.append(json_data)
+            # Debug first few items
+            if idx < 2:
+                print(f"🔍 DEBUG: Item {idx} keys: {list(json_data.keys())}")
+                print(f"🔍 DEBUG: Item {idx} has derived: {bool(json_data.get('derived'))}")
+                if json_data.get('derived'):
+                    print(f"🔍 DEBUG: Item {idx} derived keys: {list(json_data['derived'].keys())}")
+    
+    print(f"🔍 DEBUG: Extracted {len(data_items)} valid data items")
+    
+    if not data_items:
+        validation_report["status"] = "FAIL"
+        validation_report["errors"].append("No valid JSON data found in items")
+        return validation_report
     
     # =========================================================================
     # CHECK 1: Required Fields Validation
@@ -236,14 +253,84 @@ def validate_preprocessed_data(items: List[Dict]) -> Dict[str, Any]:
     items_with_scale_info = 0
     items_with_interpretations = 0
     
+    # Debug info for first few items
+    debug_samples = []
+    
     for idx, item in enumerate(data_items):
         derived = item.get('derived')
-        if derived and isinstance(derived, dict):
-            if derived.get('scale'):
-                items_with_scale_info += 1
-            if derived.get('interpretations'):
-                items_with_interpretations += 1
-        else:
+        
+        # Collect debug info for first 3 items
+        if idx < 3:
+            debug_info = {
+                'item_index': idx,
+                'questionnaire': item.get('questionnaire', 'Unknown'),
+                'derived_exists': derived is not None,
+                'derived_type': str(type(derived)),
+                'derived_is_dict': isinstance(derived, dict),
+                'has_to_py_method': hasattr(derived, 'to_py') if derived else False,
+                'has_scale': False,
+                'has_interpretations': False,
+                'derived_keys': None
+            }
+            
+            # Try to extract info from derived data
+            if derived:
+                if isinstance(derived, dict):
+                    debug_info['derived_keys'] = list(derived.keys())
+                    debug_info['has_scale'] = bool(derived.get('scale'))
+                    debug_info['has_interpretations'] = bool(derived.get('interpretations'))
+                elif hasattr(derived, 'to_py'):
+                    try:
+                        derived_py = derived.to_py()
+                        if isinstance(derived_py, dict):
+                            debug_info['derived_keys'] = list(derived_py.keys())
+                            debug_info['has_scale'] = bool(derived_py.get('scale'))
+                            debug_info['has_interpretations'] = bool(derived_py.get('interpretations'))
+                    except:
+                        pass
+                elif hasattr(derived, 'scale'):
+                    try:
+                        debug_info['has_scale'] = bool(derived.scale)
+                        debug_info['has_interpretations'] = bool(getattr(derived, 'interpretations', False))
+                    except:
+                        pass
+            
+            debug_samples.append(debug_info)
+        
+        # Handle both Python dicts and JavaScript proxy objects from n8n
+        is_valid_derived = False
+        if derived:
+            if isinstance(derived, dict):
+                # Python dictionary
+                is_valid_derived = True
+                if derived.get('scale'):
+                    items_with_scale_info += 1
+                if derived.get('interpretations'):
+                    items_with_interpretations += 1
+            elif hasattr(derived, 'to_py'):
+                # JavaScript proxy object - convert to Python
+                try:
+                    derived_py = derived.to_py()
+                    if isinstance(derived_py, dict):
+                        is_valid_derived = True
+                        if derived_py.get('scale'):
+                            items_with_scale_info += 1
+                        if derived_py.get('interpretations'):
+                            items_with_interpretations += 1
+                except:
+                    pass
+            elif hasattr(derived, '__getitem__'):
+                # Try to access as object with properties
+                try:
+                    is_valid_derived = True
+                    if hasattr(derived, 'scale') and derived.scale:
+                        items_with_scale_info += 1
+                    if hasattr(derived, 'interpretations') and derived.interpretations:
+                        items_with_interpretations += 1
+                except:
+                    pass
+        
+        if not is_valid_derived:
             items_with_empty_derived.append({
                 'item_index': idx,
                 'questionnaire': item.get('questionnaire', 'Unknown'),
@@ -252,12 +339,17 @@ def validate_preprocessed_data(items: List[Dict]) -> Dict[str, Any]:
 
     # Calculate derived count based on items that are NOT empty
     final_items_with_derived = len(data_items) - len(items_with_empty_derived)
-
+    
     validation_report["validation_checks"]["derived_data_quality"] = {
         "items_with_derived": final_items_with_derived,
         "items_with_empty_derived": len(items_with_empty_derived),
         "items_with_scale_info": items_with_scale_info,
-        "items_with_interpretations": items_with_interpretations
+        "items_with_interpretations": items_with_interpretations,
+        "debug_info": {
+            "total_data_items": len(data_items),
+            "sample_items": debug_samples,
+            "calculation": f"{len(data_items)} total - {len(items_with_empty_derived)} empty = {final_items_with_derived} with derived"
+        }
     }
     
     if items_with_empty_derived:
@@ -422,95 +514,88 @@ def format_validation_report(validation: Dict[str, Any]) -> str:
     if validation.get('errors'):
         lines.append("ERRORS:")
         for error in validation['errors']:
-            lines.append(f"  ❌ {error}")
+            lines.append(f"   {error}")
         lines.append("")
     
     # Warnings
     if validation.get('warnings'):
         lines.append("WARNINGS:")
         for warning in validation['warnings']:
-            lines.append(f"  ⚠️  {warning}")
+            lines.append(f"    {warning}")
         lines.append("")
     
     # Recommendations
     if validation.get('recommendations'):
         lines.append("RECOMMENDATIONS:")
         for rec in validation['recommendations']:
-            lines.append(f"  💡 {rec}")
-        lines.append("")
-    
-    # Questionnaire Distribution
-    if validation.get('data_quality_metrics', {}).get('questionnaire_distribution'):
-        dist = validation['data_quality_metrics']['questionnaire_distribution']
-        lines.append("QUESTIONNAIRE DISTRIBUTION:")
-        for q_name, info in dist['summary'].items():
-            lines.append(f"  {q_name}:")
-            lines.append(f"    Assessments: {info['total_assessments']}")
-            lines.append(f"    Timepoints: {info['unique_timepoints']}")
-            lines.append(f"    Score Range: {info['score_range']['min']}-{info['score_range']['max']}")
+            lines.append(f"   {rec}")
         lines.append("")
     
     lines.append("=" * 70)
     return "\n".join(lines)
 
-def load_processed_data(file_path: str) -> List[Dict]:
-    """Load processed questionnaire data from JSON file"""
-    print(f"📖 Loading processed data from: {file_path}")
-    
+# =============================================================================
+# n8n CODE NODE EXECUTION - PASS THROUGH ORIGINAL DATA
+# =============================================================================
+# Note: In n8n, 'items' is a global variable provided by the platform
+# This validator node passes through original items on PASS/WARNING
+
+if 'items' in globals():
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        print(f"🔍 VALIDATOR: Received {len(items)} items from preprocessor")
         
-        print(f"✅ Loaded {len(data)} processed items")
-        return data
+        # Run validation
+        validation_result = validate_preprocessed_data(items)
         
+        # Print formatted report
+        print("\n" + format_validation_report(validation_result))
+        
+        # Determine what to output based on validation status
+        if validation_result['status'] == 'FAIL':
+            print(f" VALIDATION FAILED: {len(validation_result['errors'])} critical error(s) found")
+            print(" Stopping workflow - fix errors before proceeding")
+            
+            # Return validation report only - this will be routed to error handling
+            return [{
+                'json': {
+                    'validation_status': 'FAIL',
+                    'validation_report': validation_result,
+                    'data_passed': False,
+                    'message': 'Data quality check failed - see validation_report for details'
+                }
+            }]
+        
+        else:  # PASS or WARNING
+            if validation_result['status'] == 'WARNING':
+                print(f"  VALIDATION PASSED WITH WARNINGS: {len(validation_result['warnings'])} warning(s)")
+            else:
+                print(f" VALIDATION PASSED: All checks successful")
+                print(f"   → {validation_result['summary']['questionnaires_analyzed']} questionnaires validated")
+            
+            print(" Passing original data to fact_contract")
+            
+            # IMPORTANT: Return the original items unchanged
+            # fact_contract expects the preprocessed questionnaire data
+            # Just pass through what we received from data_preprocess
+            return items
+
     except Exception as e:
-        print(f"❌ Error loading file: {e}")
-        sys.exit(1)
+        import traceback
+        
+        error_details = {
+            'error_message': str(e),
+            'error_type': type(e).__name__,
+            'input_items_count': len(items) if 'items' in globals() else 0,
+            'traceback': traceback.format_exc()
+        }
+        
+        print(f" VALIDATOR ERROR: {str(e)}")
+        
+        return [{
+            'json': {
+                'validation_status': 'ERROR',
+                'data_passed': False,
+                **error_details
+            }
+        }]
 
-def save_validation_report(report: Dict[str, Any], output_file: str):
-    """Save validation report to JSON file"""
-    print(f"💾 Saving validation report to: {output_file}")
-    
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
-    
-    print(f"✅ Saved validation report to {output_file}")
-
-def main():
-    parser = argparse.ArgumentParser(description='Validate processed questionnaire data')
-    parser.add_argument('input_file', help='Path to processed JSON file')
-    parser.add_argument('-o', '--output', default='validation_report.json', 
-                       help='Output validation report file (default: validation_report.json)')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
-    
-    args = parser.parse_args()
-    
-    print("🔍 Local Data Quality Validator")
-    print("=" * 50)
-    
-    # Load processed data
-    processed_data = load_processed_data(args.input_file)
-    
-    # Validate data
-    validation_report = validate_preprocessed_data(processed_data)
-    
-    # Print formatted report
-    print("\n" + format_validation_report(validation_report))
-    
-    # Save validation report
-    save_validation_report(validation_report, args.output)
-    
-    # Exit with appropriate code
-    if validation_report['status'] == 'FAIL':
-        print(f"\n❌ VALIDATION FAILED: {len(validation_report['errors'])} critical error(s) found")
-        sys.exit(1)
-    elif validation_report['status'] == 'WARNING':
-        print(f"\n⚠️  VALIDATION PASSED WITH WARNINGS: {len(validation_report['warnings'])} warning(s)")
-        sys.exit(0)
-    else:
-        print(f"\n✅ VALIDATION PASSED: All checks successful")
-        sys.exit(0)
-
-if __name__ == "__main__":
-    main()
